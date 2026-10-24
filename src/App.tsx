@@ -1,13 +1,12 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArchiveRestore, CalendarDays, Check, ChevronDown, ChevronUp, Circle, Clock3, Download, Plus, RotateCcw, Star, Trash2, X, Mic, MicOff } from 'lucide-react'
+import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { ArchiveRestore, CalendarDays, CalendarRange, Check, CircleCheck, Clock, Download, Inbox, RotateCcw, Star, Sun, X } from 'lucide-react'
 import { isSupabaseConfigured, Label, PushSubscriptionRow, supabase, Task, UserPreferences } from './lib/supabase'
-import { addLocalDays, classifyView, dateForChoice, getSevenDays, isDueOnDay, isMissed, isSameLocalDay, rankOneThing, startOfLocalDay, startOfLocalWeek, WhenChoice } from './lib/dates'
+import { addLocalDays, classifyView, dateForChoice, getSevenDays, isDueOnDay, isMissed, isSameLocalDay, rankOneThing, startOfLocalDay, startOfLocalWeek } from './lib/dates'
 import { needsDetailsPrompt } from './lib/quickDetails'
-import { VOICE_SEGMENT_SECONDS } from './features/voice/audio'
+import { Composer, type ComposerHandle, type DraftDetails } from './components/Composer'
+import { TaskRow } from './components/TaskRow'
 
 type View = 'Today' | 'Inbox' | 'Later' | 'This week' | 'Done'
-type DraftDetails = { due_at: string | null; due_is_approx: boolean; size: Task['size']; is_important: boolean; label_id: string | null }
-const blankDetails = (): DraftDetails => ({ due_at: null, due_is_approx: false, size: null, is_important: false, label_id: null })
 const tabs: View[] = ['Today', 'Inbox', 'Later', 'This week', 'Done']
 
 type BeforeInstallPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }> }
@@ -21,6 +20,23 @@ function vapidBytes(value: string) {
 function localDateInput(value: string | null) {
   if (!value) return ''
   const date = new Date(value)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function localTimeInput(value: string | null) {
+  if (!value) return ''
+  const date = new Date(value)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+function withLocalTime(value: string | null, time: string) {
+  const date = value ? new Date(value) : new Date(dateForChoice('today').due_at!)
+  const [hours, minutes] = time.split(':').map(Number)
+  date.setHours(hours, minutes, 0, 0)
+  return date.toISOString()
+}
+
+function localDayKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
@@ -64,11 +80,10 @@ function App() {
   const [view, setViewState] = useState<View>('Today')
   const [selectedDay, setSelectedDay] = useState(() => startOfLocalDay(new Date()))
   const [tasks, setTasks] = useState<Task[]>([])
+  const [tasksLoaded, setTasksLoaded] = useState(false)
+  const [userId, setUserId] = useState<string | null>(null)
   const [labels, setLabels] = useState<Label[]>([])
-  const [title, setTitle] = useState('')
-  const [draft, setDraft] = useState<DraftDetails>(blankDetails)
   const [expanded, setExpanded] = useState<string | null>(null)
-  const [editingTitle, setEditingTitle] = useState('')
   const [error, setError] = useState('')
   const [toast, setToast] = useState<{ text: string; undo: () => Promise<void>; edit?: () => void } | null>(null)
   const [toastClosing, setToastClosing] = useState(false)
@@ -76,8 +91,6 @@ function App() {
   const [completingTaskId, setCompletingTaskId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [syncStatus, setSyncStatus] = useState(navigator.onLine ? 'Connecting' : 'Offline')
-  const [labelEditor, setLabelEditor] = useState(false)
-  const [newLabel, setNewLabel] = useState('')
   const [isOnline, setIsOnline] = useState(navigator.onLine)
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [preferences, setPreferences] = useState<UserPreferences | null>(null)
@@ -87,47 +100,28 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsDraft, setSettingsDraft] = useState({ daily_nudge_time: '18:30', quiet_hours_start: '22:30', quiet_hours_end: '08:00', weekly_summary_enabled: true })
   const [pushBusy, setPushBusy] = useState(false)
-  const [voiceState, setVoiceState] = useState<'idle' | 'listening' | 'transcribing' | 'ready'>('idle')
-  const [voiceModelState, setVoiceModelState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
-  const [voiceMessage, setVoiceMessage] = useState('')
-  const [voiceLevel, setVoiceLevel] = useState(0)
-  const voiceHasTranscriptRef = useRef(false)
-  const [voiceProcessing, setVoiceProcessing] = useState(false)
   const [quickDetailsTaskId, setQuickDetailsTaskId] = useState<string | null>(null)
+  const composerRef = useRef<ComposerHandle>(null)
   const [notificationMessage, setNotificationMessage] = useState('')
   const [retryPushSetup, setRetryPushSetup] = useState<boolean | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const workerRef = useRef<Worker | null>(null)
-  const micStreamRef = useRef<MediaStream | null>(null)
-  const audioContextRef = useRef<AudioContext | null>(null)
-  const voiceSegmentSamplesRef = useRef<Float32Array[]>([])
-  const voiceSegmentLengthRef = useRef(0)
-  const voiceSegmentHasSpeechRef = useRef(false)
-  const pendingVoiceSegmentsRef = useRef<Float32Array[]>([])
-  const voiceWorkerBusyRef = useRef(false)
-  const voiceCaptureEndedRef = useRef(false)
-  const voiceStartedRef = useRef(0)
-  const lastVoiceRef = useRef(0)
-  const voiceSampleRateRef = useRef(16000)
-  const audioFrameRef = useRef<number | null>(null)
 
-  const preloadVoiceWorker = useCallback(() => {
-    try {
-      const worker = new Worker(new URL('./features/voice/whisper.worker.ts', import.meta.url), { type: 'module' })
-      workerRef.current = worker
-      setVoiceModelState('loading')
-      worker.onmessage = event => {
-        if (event.data.state === 'downloading') return
-        if (event.data.state === 'preloaded') { setVoiceModelState('ready'); return }
-        if (event.data.state === 'preload-error') { setVoiceModelState('error'); return }
-        if (event.data.state) return
-      }
-      worker.onerror = () => setVoiceModelState('error')
-      worker.postMessage({ type: 'preload' })
-    } catch {
-      setVoiceModelState('error')
+  useLayoutEffect(() => {
+    const root = document.documentElement
+    const composer = document.querySelector<HTMLElement>('.composer')
+    const tabs = document.querySelector<HTMLElement>('.mobile-tabs')
+    const observeHeight = (element: HTMLElement | null, property: '--composer-h' | '--tabs-h') => {
+      if (!element) { root.style.setProperty(property, '0px'); return null }
+      const observer = new ResizeObserver(entries => {
+        const height = entries[0]?.contentRect.height ?? 0
+        root.style.setProperty(property, `${height}px`)
+      })
+      observer.observe(element)
+      return observer
     }
-  }, [])
+    const composerObserver = observeHeight(composer, '--composer-h')
+    const tabsObserver = observeHeight(tabs, '--tabs-h')
+    return () => { composerObserver?.disconnect(); tabsObserver?.disconnect() }
+  }, [signedIn, view])
 
   useEffect(() => {
     const onOnline = () => setIsOnline(true)
@@ -145,8 +139,14 @@ function App() {
 
   useEffect(() => {
     if (!supabase) return
-    supabase.auth.getSession().then(({ data }) => { setSignedIn(Boolean(data.session)); setSessionReady(true) })
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setSignedIn(Boolean(session)))
+    supabase.auth.getSession().then(({ data }) => { setSignedIn(Boolean(data.session)); setUserId(data.session?.user.id ?? null); setSessionReady(true) })
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSignedIn(Boolean(session)); setUserId(session?.user.id ?? null)
+      if (!session) {
+        try { Object.keys(localStorage).filter(key => key.startsWith('taskflow:snapshot:')).forEach(key => localStorage.removeItem(key)) }
+        catch { /* local snapshots are optional */ }
+      }
+    })
     return () => listener.subscription.unsubscribe()
   }, [])
 
@@ -157,30 +157,53 @@ function App() {
       supabase.from('labels').select('*').order('name'),
     ])
     let loadError = ''
+    let resolvedLabels = (labelResult.data ?? []) as Label[]
     if (taskResult.error) loadError = taskResult.error.message
     else setTasks((taskResult.data ?? []) as Task[])
     if (labelResult.error) loadError ||= labelResult.error.message
     else {
-      const loaded = (labelResult.data ?? []) as Label[]
+      const loaded = resolvedLabels
       setLabels(loaded)
       if (!loaded.length) {
         const { data: userData } = await supabase.auth.getUser()
         if (userData.user) {
           const inserted = await supabase.from('labels').insert(['Study', 'Work', 'Personal'].map(name => ({ user_id: userData.user!.id, name }))).select('*')
-          if (!inserted.error) setLabels(inserted.data as Label[])
+          if (!inserted.error) { resolvedLabels = inserted.data as Label[]; setLabels(resolvedLabels) }
         }
       }
     }
     setError(loadError)
-  }, [])
+    setTasksLoaded(true)
+    if (!loadError && userId) {
+      try {
+        const tasksSnapshot = taskResult.data ?? []
+        const labelsSnapshot = resolvedLabels
+        const snapshot = JSON.stringify({ tasks: tasksSnapshot, labels: labelsSnapshot, savedAt: Date.now() })
+        if (snapshot.length < 1_000_000) localStorage.setItem(`taskflow:snapshot:v1:${userId}`, snapshot)
+      } catch { /* local snapshots are optional */ }
+    }
+  }, [userId])
 
   useEffect(() => {
     if (!signedIn || !supabase) return
     const client = supabase
+    if (userId) {
+      try {
+        const saved = localStorage.getItem(`taskflow:snapshot:v1:${userId}`)
+        if (saved) {
+          const snapshot = JSON.parse(saved) as { tasks?: Task[]; labels?: Label[]; savedAt?: number }
+          if (Date.now() - (snapshot.savedAt ?? 0) < 60_000 && Array.isArray(snapshot.tasks) && Array.isArray(snapshot.labels)) {
+            setTasks(snapshot.tasks); setLabels(snapshot.labels); setTasksLoaded(true)
+          }
+        }
+      } catch { /* ignore invalid or inaccessible local storage */ }
+    }
     void load()
+    let reloadTimer = 0
+    const scheduleLoad = () => { window.clearTimeout(reloadTimer); reloadTimer = window.setTimeout(() => void load(), 250) }
     const channel = client.channel('phase1-sync')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, () => { void load() })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'labels' }, () => { void load() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, scheduleLoad)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'labels' }, scheduleLoad)
       .subscribe(status => {
         if (status === 'SUBSCRIBED') setSyncStatus(navigator.onLine ? 'Synced' : 'Offline')
         else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') setSyncStatus('Sync unavailable')
@@ -191,8 +214,8 @@ function App() {
     window.addEventListener('focus', onFocus)
     window.addEventListener('offline', onOffline)
     window.addEventListener('online', onOnline)
-    return () => { window.removeEventListener('focus', onFocus); window.removeEventListener('offline', onOffline); window.removeEventListener('online', onOnline); void client.removeChannel(channel) }
-  }, [signedIn, load])
+    return () => { window.clearTimeout(reloadTimer); window.removeEventListener('focus', onFocus); window.removeEventListener('offline', onOffline); window.removeEventListener('online', onOnline); void client.removeChannel(channel) }
+  }, [signedIn, userId, load])
 
   const loadNotificationSettings = useCallback(async () => {
     if (!supabase) return
@@ -235,30 +258,13 @@ function App() {
     }
   }, [quickDetailsTaskId, tasks])
 
-  useEffect(() => () => {
-    workerRef.current?.terminate()
-    micStreamRef.current?.getTracks().forEach(track => track.stop())
-    if (audioFrameRef.current !== null) cancelAnimationFrame(audioFrameRef.current)
-    void audioContextRef.current?.close()
-  }, [])
-
-  useEffect(() => {
-    if (!sessionReady || !signedIn || workerRef.current) return
-    preloadVoiceWorker()
-    const worker = workerRef.current as Worker | null
-    return () => {
-      worker?.terminate()
-      if (workerRef.current === worker) workerRef.current = null
-    }
-  }, [sessionReady, signedIn, preloadVoiceWorker])
-
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { setExpanded(null); return }
       if (!(event.key.toLowerCase() === 'n' || event.key.toLowerCase() === 'c') || event.ctrlKey || event.metaKey || event.altKey) return
       const active = document.activeElement
       if (active instanceof HTMLElement && (active.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName))) return
-      event.preventDefault(); inputRef.current?.focus()
+      event.preventDefault(); composerRef.current?.focus()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -281,9 +287,9 @@ function App() {
   const selectedDayTasks = view === 'Today' ? visibleTasks : []
   const oneThing = view === 'Today' ? rankOneThing(selectedDayTasks)[0] : undefined
   const remainingTodayTasks = oneThing ? selectedDayTasks.filter(task => task.id !== oneThing.id) : selectedDayTasks
-  const missedTasks = view === 'Today' && isSameLocalDay(selectedDay, new Date())
+  const missedTasks = useMemo(() => view === 'Today' && isSameLocalDay(selectedDay, new Date())
     ? tasks.filter(task => !task.deleted_at && task.status === 'open' && isMissed(task))
-    : []
+    : [], [tasks, view, selectedDay])
   const basicTasks = useMemo(() => tasks.filter(needsDetailsPrompt), [tasks])
   const selectedQuickTask = quickDetailsTaskId ? tasks.find(task => task.id === quickDetailsTaskId && needsDetailsPrompt(task)) : undefined
 
@@ -293,159 +299,20 @@ function App() {
     setError('')
   }
 
-  function setWhen(choice: WhenChoice) {
-    if (draft.due_at && choice === 'today' && localDateInput(draft.due_at) === localDateInput(dateForChoice('today').due_at) && !draft.due_is_approx) {
-      setDraft(d => ({ ...d, due_at: null, due_is_approx: false })); return
-    }
-    const date = dateForChoice(choice)
-    setDraft(d => ({ ...d, ...date }))
-  }
-
-  async function addTask(event: FormEvent) {
-    event.preventDefault()
-    const cleanTitle = title.trim()
-    if (!supabase || !cleanTitle || busy || !isOnline) return
+  async function addTask(cleanTitle: string, draft: DraftDetails): Promise<boolean> {
+    if (!supabase || !cleanTitle || busy || !isOnline) return false
     const client = supabase
     setBusy(true); setError('')
     const { data: auth } = await client.auth.getUser()
-    if (!auth.user) { setBusy(false); setError('Sign in again to save this task.'); return }
+    if (!auth.user) { setBusy(false); setError('Sign in again to save this task.'); return false }
     const result = await client.from('tasks').insert({ user_id: auth.user.id, title: cleanTitle, ...draft, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata' }).select('*, labels(name)').single()
     setBusy(false)
-    if (result.error) { setError(`Not saved · ${result.error.message}`); return }
-    setTasks(current => [result.data as Task, ...current]); setTitle(''); setDraft(blankDetails()); setError(''); setVoiceMessage(''); setVoiceState('idle'); voiceHasTranscriptRef.current = false
+    if (result.error) { setError(`Not saved · ${result.error.message}`); return false }
+    setTasks(current => [result.data as Task, ...current]); setError('')
     setNewTaskId(result.data.id)
     window.setTimeout(() => setNewTaskId(current => current === result.data.id ? null : current), 160)
     setToast({ text: 'Task added', undo: async () => { const undone = await client.from('tasks').update({ deleted_at: new Date().toISOString() }).eq('id', result.data.id); if (!undone.error) setTasks(current => current.filter(t => t.id !== result.data.id)); else setError(`Not saved · ${undone.error.message}`) } })
-    inputRef.current?.focus()
-  }
-
-  function stopVoiceCapture() {
-    if (audioFrameRef.current !== null) cancelAnimationFrame(audioFrameRef.current)
-    audioFrameRef.current = null
-    setVoiceLevel(0)
-    micStreamRef.current?.getTracks().forEach(track => track.stop()); micStreamRef.current = null
-    void audioContextRef.current?.close(); audioContextRef.current = null
-    flushVoiceSegment()
-    voiceCaptureEndedRef.current = true
-    setVoiceState('transcribing')
-    setVoiceMessage('Finishing the transcript…')
-    postNextVoiceSegment()
-  }
-
-  function postNextVoiceSegment() {
-    if (voiceWorkerBusyRef.current) return
-    const audio = pendingVoiceSegmentsRef.current.shift()
-    if (!audio) {
-      setVoiceProcessing(false)
-      if (voiceCaptureEndedRef.current) {
-        setVoiceState('ready')
-        setVoiceMessage(voiceHasTranscriptRef.current ? 'Transcript ready. Edit the title, then press Add.' : 'No speech was heard. Try again.')
-      } else setVoiceMessage('Listening… transcript updates as speech is processed.')
-      return
-    }
-    if (!workerRef.current) workerRef.current = new Worker(new URL('./features/voice/whisper.worker.ts', import.meta.url), { type: 'module' })
-    const worker = workerRef.current
-    voiceWorkerBusyRef.current = true; setVoiceProcessing(true)
-    worker.onmessage = event => {
-      if (event.data.state === 'downloading') { setVoiceMessage('Getting voice ready…'); return }
-      if (event.data.state === 'loading') { setVoiceModelState('loading'); setVoiceMessage('Getting voice ready…'); return }
-      if (event.data.state === 'fallback') { setVoiceMessage('Switching to the compatible on-device model…'); return }
-      if (event.data.state === 'transcribing') { setVoiceMessage('Transcribing on this device…'); return }
-      if (event.data.state === 'preloaded') { setVoiceModelState('ready'); return }
-      if (event.data.state === 'preload-error') { setVoiceModelState('error'); return }
-      if (event.data.state) return
-      voiceWorkerBusyRef.current = false
-      if (event.data.error) {
-        setVoiceModelState('error')
-        micStreamRef.current?.getTracks().forEach(track => track.stop()); micStreamRef.current = null
-        void audioContextRef.current?.close(); audioContextRef.current = null
-        voiceCaptureEndedRef.current = true
-        setVoiceProcessing(false); setVoiceState(voiceHasTranscriptRef.current ? 'ready' : 'idle')
-        setVoiceMessage(`Transcription failed · ${String(event.data.error).slice(0, 180)}. No task was added.`)
-        return
-      }
-      const partial = String(event.data.text ?? '').trim()
-      setVoiceModelState('ready')
-      if (partial) {
-        voiceHasTranscriptRef.current = true
-        setTitle(current => (current.trim() ? `${current.trim()} ${partial}` : partial).slice(0, 500))
-      }
-      postNextVoiceSegment()
-    }
-    worker.onerror = event => {
-      micStreamRef.current?.getTracks().forEach(track => track.stop()); micStreamRef.current = null
-      void audioContextRef.current?.close(); audioContextRef.current = null
-      voiceWorkerBusyRef.current = false; voiceCaptureEndedRef.current = true; pendingVoiceSegmentsRef.current = []
-      setVoiceProcessing(false); setVoiceState(voiceHasTranscriptRef.current ? 'ready' : 'idle')
-      setVoiceMessage(`Voice worker failed · ${event.message || 'Check that the app loaded fully.'}. No task was added.`)
-    }
-    worker.postMessage({ audio, sampleRate: voiceSampleRateRef.current }, [audio.buffer])
-  }
-
-  function flushVoiceSegment() {
-    if (!voiceSegmentSamplesRef.current.length) return
-    if (voiceSegmentHasSpeechRef.current) {
-      const length = voiceSegmentSamplesRef.current.reduce((total, sample) => total + sample.length, 0)
-      const merged = new Float32Array(length)
-      let offset = 0
-      for (const sample of voiceSegmentSamplesRef.current) { merged.set(sample, offset); offset += sample.length }
-      pendingVoiceSegmentsRef.current.push(merged)
-    }
-    voiceSegmentSamplesRef.current = []; voiceSegmentLengthRef.current = 0; voiceSegmentHasSpeechRef.current = false
-    postNextVoiceSegment()
-  }
-
-  function cancelVoiceTranscription() {
-    micStreamRef.current?.getTracks().forEach(track => track.stop()); micStreamRef.current = null
-    void audioContextRef.current?.close(); audioContextRef.current = null
-    workerRef.current?.terminate(); workerRef.current = null
-    pendingVoiceSegmentsRef.current = []; voiceWorkerBusyRef.current = false; voiceCaptureEndedRef.current = true
-    setVoiceLevel(0)
-    preloadVoiceWorker()
-    setVoiceProcessing(false); setVoiceState(voiceHasTranscriptRef.current ? 'ready' : 'idle')
-    setVoiceMessage('Transcription stopped. No task was added.')
-  }
-
-  async function startVoiceCapture() {
-    if (!['idle', 'ready'].includes(voiceState) || !isOnline) return
-    voiceHasTranscriptRef.current = false; pendingVoiceSegmentsRef.current = []; voiceWorkerBusyRef.current = false; voiceCaptureEndedRef.current = false
-    setVoiceLevel(0)
-    setVoiceMessage('Microphone access lets Taski turn speech into a task on this device.')
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } })
-      micStreamRef.current = stream
-      const context = new AudioContext()
-      audioContextRef.current = context
-      voiceSampleRateRef.current = context.sampleRate
-      const source = context.createMediaStreamSource(stream)
-      const processor = context.createScriptProcessor(4096, 1, 1)
-      voiceSegmentSamplesRef.current = []; voiceSegmentLengthRef.current = 0; voiceSegmentHasSpeechRef.current = false
-      voiceStartedRef.current = Date.now(); lastVoiceRef.current = 0
-      processor.onaudioprocess = event => {
-        const input = event.inputBuffer.getChannelData(0)
-        let rms = 0
-        for (let i = 0; i < input.length; i++) rms += input[i] * input[i]
-        rms = Math.sqrt(rms / input.length)
-        setVoiceLevel(Math.min(1, rms * 10))
-        if (rms > 0.012) { lastVoiceRef.current = Date.now(); voiceSegmentHasSpeechRef.current = true }
-        if (lastVoiceRef.current && Date.now() - lastVoiceRef.current > 1300) { stopVoiceCapture(); return }
-        if (!lastVoiceRef.current && Date.now() - voiceStartedRef.current > 8000) { stopVoiceCapture(); return }
-        if (Date.now() - voiceStartedRef.current > 45000) { stopVoiceCapture(); return }
-        const copy = new Float32Array(input)
-        voiceSegmentSamplesRef.current.push(copy)
-        voiceSegmentLengthRef.current += copy.length
-        if (voiceSegmentLengthRef.current >= context.sampleRate * VOICE_SEGMENT_SECONDS) flushVoiceSegment()
-      }
-      source.connect(processor); processor.connect(context.destination)
-      setVoiceState('listening'); setVoiceMessage('Listening… Speak now. Text appears as speech is processed.')
-    } catch (cause) {
-      micStreamRef.current?.getTracks().forEach(track => track.stop()); micStreamRef.current = null
-      void audioContextRef.current?.close(); audioContextRef.current = null
-      setVoiceLevel(0)
-      setVoiceState('idle')
-      const detail = cause instanceof Error ? cause.message : String(cause)
-      setVoiceMessage(`Microphone could not start · ${detail.slice(0, 180)}. You can type your task instead.`)
-    }
+    return true
   }
 
   async function savePreferences(values: Partial<UserPreferences>) {
@@ -633,7 +500,7 @@ function App() {
     const params = new URLSearchParams(window.location.search)
     const quickDetailsId = params.get('quick_details')
     if (quickDetailsId) { setQuickDetailsTaskId(quickDetailsId); setViewState('Today'); params.delete('quick_details'); window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`) }
-    if (params.get('capture') === 'voice') { params.delete('capture'); window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`); window.setTimeout(() => void startVoiceCapture(), 300) }
+    if (params.get('capture') === 'voice') { params.delete('capture'); window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`); window.setTimeout(() => composerRef.current?.startVoice(), 300) }
   }, [signedIn])
 
   async function updateTask(task: Task, values: Partial<Task>) {
@@ -651,17 +518,18 @@ function App() {
     const completedAt = new Date().toISOString()
     setCompletingTaskId(task.id)
     const { error: updateError } = await client.from('tasks').update({ status: 'completed', completed_at: completedAt, updated_at: completedAt }).eq('id', task.id)
-    if (updateError) { setCompletingTaskId(null); setError(`Not saved · ${updateError.message}`); return }
+    if (updateError) { setCompletingTaskId(null); setNewTaskId(task.id); window.setTimeout(() => setNewTaskId(current => current === task.id ? null : current), 160); setError(`Not saved · ${updateError.message}`); return }
+    setToast({ text: `Done “${task.title}”`, undo: async () => {
+      const restoredAt = new Date().toISOString()
+      const undone = await client.from('tasks').update({ status: 'open', completed_at: null, updated_at: restoredAt }).eq('id', task.id)
+      if (!undone.error) setTasks(current => current.map(item => item.id === task.id ? { ...item, status: 'open', completed_at: null } : item))
+      else setError(`Not saved · ${undone.error.message}`)
+    } })
+    const completeAnimMs = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 220
     window.setTimeout(() => {
       setTasks(current => current.map(item => item.id === task.id ? { ...item, status: 'completed', completed_at: completedAt } : item))
       setCompletingTaskId(null)
-      setToast({ text: `Done “${task.title}”`, undo: async () => {
-        const restoredAt = new Date().toISOString()
-        const undone = await client.from('tasks').update({ status: 'open', completed_at: null, updated_at: restoredAt }).eq('id', task.id)
-        if (!undone.error) setTasks(current => current.map(item => item.id === task.id ? { ...item, status: 'open', completed_at: null } : item))
-        else setError(`Not saved · ${undone.error.message}`)
-      } })
-    }, 180)
+    }, completeAnimMs)
   }
 
   async function removeTask(task: Task) {
@@ -681,14 +549,14 @@ function App() {
     setTasks(current => current.map(item => item.id === task.id ? { ...item, deleted_at: null } : item))
   }
 
-  async function createLabel() {
-    const name = newLabel.trim()
-    if (!supabase || !name || !isOnline) return
+  async function createLabel(name: string) {
+    const cleanName = name.trim()
+    if (!supabase || !cleanName || !isOnline) return
     const { data: userData } = await supabase.auth.getUser()
     if (!userData.user) return
-    const { data, error: labelError } = await supabase.from('labels').insert({ user_id: userData.user.id, name }).select('*').single()
+    const { data, error: labelError } = await supabase.from('labels').insert({ user_id: userData.user.id, name: cleanName }).select('*').single()
     if (labelError) setError(labelError.message)
-    else { setLabels(current => [...current, data as Label]); setNewLabel('') }
+    else setLabels(current => [...current, data as Label])
   }
 
   async function renameLabel(label: Label, name: string) {
@@ -706,20 +574,23 @@ function App() {
     else {
       setLabels(current => current.filter(item => item.id !== label.id))
       setTasks(current => current.map(task => task.label_id === label.id ? { ...task, label_id: null, labels: null } : task))
-      setDraft(current => current.label_id === label.id ? { ...current, label_id: null } : current)
     }
   }
 
-  function renderTaskRows(items: Task[], listName: string, emptyMessage = 'Nothing here yet.') {
-    return <section className="task-list" aria-label={`${listName} tasks`}>
-      {!items.length && <p className="empty-state">{emptyMessage}</p>}
-      {items.map(task => <article key={task.id} className={`task-card ${task.status === 'completed' ? 'is-complete' : ''} ${newTaskId === task.id ? 'task-entering' : ''} ${completingTaskId === task.id ? 'task-completing' : ''}`}>
-        <div className="task-main"><button className={`complete-button ${task.status === 'completed' ? 'checked' : ''} ${listName === 'Done' && task.status === 'completed' ? 'done-undo-button' : ''}`} aria-label={task.status === 'completed' ? `Undo completion of ${task.title}` : `Complete ${task.title}`} disabled={!isOnline} onClick={() => task.status === 'open' ? void completeTask(task) : void updateTask(task, { status: 'open', completed_at: null })}>{task.status === 'completed' ? <>{listName === 'Done' && <span>Undo</span>}<Check size={17}/></> : <Circle size={21}/>}</button>
-          <button className="task-title-button" onClick={() => { setExpanded(expanded === task.id ? null : task.id); setEditingTitle(task.title) }} aria-expanded={expanded === task.id}><span className="task-title">{task.title}</span><span className="task-meta">{task.due_at && <span className={`row-tag ${task.due_is_approx ? 'rough-tag' : ''}`}><CalendarDays size={12}/>{task.due_is_approx ? 'Around ' : ''}{new Date(task.due_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>}{task.size && <span className="row-tag">{task.size === 'quick' ? 'Quick' : task.size === 'hour' ? 'An hour' : 'Big'}</span>}{task.reminder_offset !== 'none' && <span className="row-tag"><Clock3 size={12}/>{task.reminder_offset === 'at_time' ? 'Reminder' : task.reminder_offset === '1_day_before' ? '1 day before' : '2 days before'}</span>}{task.is_important && <span className="important-tag"><Star size={12}/>Important</span>}{task.labels?.name && <span className="label-tag">{task.labels.name}</span>}</span></button>
-          <button className="icon-button expand-button" aria-label={expanded === task.id ? 'Close task details' : 'Edit task details'} onClick={() => { setExpanded(expanded === task.id ? null : task.id); setEditingTitle(task.title) }}>{expanded === task.id ? <ChevronUp size={17}/> : <ChevronDown size={17}/>}</button><button className="icon-button remove-button" aria-label={`Remove ${task.title}`} disabled={!isOnline} onClick={() => void removeTask(task)}><Trash2 size={16}/></button>
-        </div>
-        {expanded === task.id && <div className="task-editor"><label className="edit-title-label">Title<input disabled={!isOnline} value={editingTitle} maxLength={500} onChange={e => setEditingTitle(e.target.value)} onBlur={() => { const next = editingTitle.trim(); if (next && next !== task.title) void updateTask(task, { title: next }) }} onKeyDown={e => { if (e.key === 'Enter') { e.currentTarget.blur() }; if (e.key === 'Escape') { setEditingTitle(task.title); setExpanded(null) } }}/></label><label className="edit-select">When<input disabled={!isOnline} type="date" value={localDateInput(task.due_at)} onChange={e => void updateTask(task, { due_at: e.target.value ? new Date(`${e.target.value}T12:00:00`).toISOString() : null, due_is_approx: false })}/></label><label className="edit-select">Size<select disabled={!isOnline} value={task.size ?? ''} onChange={e => void updateTask(task, { size: (e.target.value || null) as Task['size'] })}><option value="">Not set</option><option value="quick">Quick</option><option value="hour">An hour</option><option value="big">Big</option></select></label><label className="edit-select">Label<select disabled={!isOnline} value={task.label_id ?? ''} onChange={e => void updateTask(task, { label_id: e.target.value || null })}><option value="">No label</option>{labels.map(label => <option value={label.id} key={label.id}>{label.name}</option>)}</select></label><label className="edit-select">Remind me<select disabled={!isOnline || !task.due_at || task.due_is_approx} value={task.reminder_offset} onChange={e => void updateTask(task, { reminder_offset: e.target.value as Task['reminder_offset'] })}><option value="none">No reminder</option><option value="at_time">At my reminder time</option><option value="1_day_before">A day before</option><option value="2_days_before">Two days before</option></select></label><button disabled={!isOnline} className={`choice-chip icon-chip ${task.is_important ? 'starred' : ''}`} aria-pressed={task.is_important} onClick={() => void updateTask(task, { is_important: !task.is_important })}><Star size={15}/>Important</button></div>}
-      </article>)}
+  const rowActionsRef = useRef({ updateTask, completeTask, removeTask })
+  rowActionsRef.current = { updateTask, completeTask, removeTask }
+  const onToggleTaskExpand = useCallback((id: string) => setExpanded(current => current === id ? null : id), [])
+  const onRowUpdate = useCallback((task: Task, values: Partial<Task>) => { void rowActionsRef.current.updateTask(task, values) }, [])
+  const onRowComplete = useCallback((task: Task) => {
+    if (task.status === 'open') void rowActionsRef.current.completeTask(task)
+    else void rowActionsRef.current.updateTask(task, { status: 'open', completed_at: null })
+  }, [])
+  const onRowRemove = useCallback((task: Task) => { void rowActionsRef.current.removeTask(task) }, [])
+
+  function renderTaskRows(items: Task[], listName: string, emptyMessage = "Nothing here yet.") {
+    return <section className="task-list" aria-label={listName + " tasks"}>
+      {!items.length && (tasksLoaded ? <p className="empty-state">{emptyMessage}</p> : <><span className="sr-only" role="status">Loading tasks</span><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/></>)}
+      {items.map(task => <TaskRow key={task.id} task={task} labels={labels} listName={listName} isOnline={isOnline} expanded={expanded === task.id} isNew={newTaskId === task.id} isCompleting={completingTaskId === task.id} onToggleExpand={onToggleTaskExpand} onComplete={onRowComplete} onUpdate={onRowUpdate} onRemove={onRowRemove}/>)}
     </section>
   }
 
@@ -730,18 +601,32 @@ function App() {
       tasks: source.filter(task => task.due_at && !task.due_is_approx && isSameLocalDay(new Date(task.due_at), day)),
     })).filter(group => (!omitThrough || group.day > omitThrough) && group.tasks.length > 0)
     const roughTasks = source.filter(task => task.due_at && task.due_is_approx && (!omitThrough || new Date(task.due_at) > omitThrough))
-    if (!exactGroups.length && !roughTasks.length) return <p className="empty-state">No more tasks this week.</p>
+    if (!exactGroups.length && !roughTasks.length) return tasksLoaded ? <p className="empty-state">No more tasks this week.</p> : <div className="week-agenda"><span className="sr-only" role="status">Loading tasks</span><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/></div>
     return <div className="week-agenda">
       {exactGroups.map(group => <section className="week-day-group" key={group.day.toISOString()}><h3>{isSameLocalDay(group.day, new Date()) ? 'Today' : group.day.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</h3>{renderTaskRows(group.tasks, group.day.toLocaleDateString(undefined, { weekday: 'long' }))}</section>)}
       {roughTasks.length > 0 && <section className="week-day-group"><h3>Sometime this week</h3>{renderTaskRows(roughTasks, 'Sometime this week')}</section>}
     </div>
   }
 
-  const viewCount = (tab: View) => tab === 'This week'
-    ? weekTasks.length
-    : tab === 'Done'
-      ? tasks.filter(task => task.status === 'completed' && !task.deleted_at).length
-      : tasks.filter(task => !task.deleted_at && task.status === 'open' && (tab === 'Today' ? isDueOnDay(task, new Date()) || isMissed(task) : classifyView(task) === tab)).length
+  const taskCounts = useMemo(() => {
+    const counts: Record<View, number> = { Today: 0, Inbox: 0, Later: 0, 'This week': 0, Done: 0 }
+    const perDay = new Map<string, number>()
+    const today = startOfLocalDay(new Date())
+    for (const task of tasks) {
+      if (task.deleted_at) continue
+      if (task.status === 'completed') { counts.Done++; continue }
+      if (task.due_at) {
+        const due = new Date(task.due_at)
+        const key = localDayKey(due)
+        perDay.set(key, (perDay.get(key) ?? 0) + 1)
+        if (due >= weekStart && due < weekEnd) counts['This week']++
+        if (isSameLocalDay(due, today) || isMissed(task)) counts.Today++
+        else if (classifyView(task) === 'Later') counts.Later++
+      } else counts.Inbox++
+    }
+    return { counts, perDay }
+  }, [tasks, weekStart, weekEnd])
+  const viewCount = (tab: View) => taskCounts.counts[tab]
 
   const todayLabel = selectedDay.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
   const pushConfigured = Boolean(import.meta.env.VITE_VAPID_PUBLIC_KEY)
@@ -769,9 +654,9 @@ function App() {
 
   return <div className="app-shell">
     <header className="topbar"><a className="brand" href="#" aria-label="Taskflow home"><span className="brand-mark"><Check size={16} /></span><span>Taskflow</span></a><div className="topbar-right">{installPrompt && <button className="text-button install-button" onClick={() => void installApp()}><Download size={15}/>Install app</button>}<span className="sync-state">{isOnline && syncStatus === 'Synced' && <span className="online-dot" />}{isOnline ? syncStatus : 'Offline'}</span><button className="text-button" aria-expanded={settingsOpen} onClick={() => { setSettingsOpen(open => !open); if (!settingsOpen) void loadNotificationSettings() }}>Settings</button><button className="text-button signout" onClick={() => supabase?.auth.signOut()}>Sign out</button></div></header>
-    {!isOnline && <div className="offline-banner" role="status">Offline · read-only. Reconnect to load or save changes.</div>}
+    {!isOnline && <div className="offline-banner" role="status">Offline · showing your last saved tasks. Reconnect to make changes.</div>}
     <div className="workspace">
-      <aside className="sidebar"><p className="nav-label">Your lists</p><nav aria-label="Task views">{tabs.map(tab => <button key={tab} className={`nav-item ${view === tab ? 'selected' : ''}`} onClick={() => chooseView(tab)}><span className={`nav-symbol ${tab.toLowerCase().replace(' ', '-')}`} />{tab}<span className="nav-count">{viewCount(tab)}</span></button>)}</nav></aside>
+      <aside className="sidebar"><p className="nav-label">Your lists</p><nav aria-label="Task views">{tabs.map(tab => <button key={tab} className={`nav-item ${view === tab ? 'selected' : ''}`} aria-current={view === tab ? 'page' : undefined} onClick={() => chooseView(tab)}>{tab === 'Today' ? <Sun size={16}/> : tab === 'Inbox' ? <Inbox size={16}/> : tab === 'Later' ? <Clock size={16}/> : tab === 'This week' ? <CalendarRange size={16}/> : <CircleCheck size={16}/>} {tab}<span className="nav-count">{viewCount(tab)}</span></button>)}</nav></aside>
       <main className="main-content">
         <div className={`content-inner ${view === 'Today' ? 'today-content' : ''}`}>
           {settingsOpen && <section className="settings-panel" aria-label="Notification settings"><div className="settings-heading"><div><p className="eyebrow">A quieter way to stay on top</p><h2>Notifications</h2></div><button className="icon-button" aria-label="Close settings" onClick={() => setSettingsOpen(false)}><X size={17}/></button></div>
@@ -785,31 +670,19 @@ function App() {
           </section>}
           {showNotificationPrompt && <aside className="nudge-offer" aria-label="Daily nudge setup"><span>Want a daily nudge so nothing slips?</span><div><button className="primary-button" disabled={!isOnline || pushBusy} onClick={() => void enableNotifications()}>{pushBusy ? 'Setting up…' : 'Yes'}</button><button className="text-button" disabled={!isOnline} onClick={() => void deferNotificationPrompt()}>Not now</button></div></aside>}
           <div className="page-heading"><h1>{view}</h1>{view === 'Today' && <p className="list-caption">{todayLabel}</p>}</div>
-          {view !== 'Done' && <form className="composer" onSubmit={addTask}>
-            <div className="composer-field"><Plus className="composer-plus" size={19} aria-hidden="true"/><input ref={inputRef} aria-label="Add a task" placeholder="Add a task…" value={title} maxLength={500} onChange={e => setTitle(e.target.value)} disabled={!isOnline} /><button type="button" className={`icon-button voice-button ${voiceState === 'listening' ? 'listening' : ''}`} aria-label={voiceState === 'listening' ? 'Stop listening' : 'Add by voice'} disabled={!isOnline || voiceProcessing && voiceState !== 'listening'} onClick={() => voiceState === 'listening' ? stopVoiceCapture() : void startVoiceCapture()}>{voiceState === 'listening' ? <MicOff size={18}/> : <Mic size={18}/>}</button><button className="primary-button add-button" type="submit" disabled={!title.trim() || busy || !isOnline || voiceState === 'listening' || voiceState === 'transcribing' || voiceProcessing}>{!isOnline ? 'Offline' : busy ? 'Saving…' : voiceState === 'ready' && voiceHasTranscriptRef.current ? 'Add task' : 'Add'}</button></div>
-            {(voiceState !== 'idle' || voiceMessage || voiceModelState === 'loading' || voiceModelState === 'error') && <div className="voice-panel"><div className="voice-status-row">{voiceState === 'listening' && <div className="voice-meter" role="img" aria-label="Live microphone level">{[0.55, 0.78, 1, 0.78, 0.55].map((height, index) => <span key={index} style={{ transform: `scaleY(${Math.max(0.12, voiceLevel * height)})` }} />)}</div>}<p className="voice-status" role="status">{voiceMessage || (voiceModelState === 'loading' ? 'Getting voice ready…' : voiceModelState === 'error' && voiceState === 'idle' ? 'Voice could not load. Tap the mic to retry, or type instead.' : '')}</p>{voiceProcessing && <button type="button" className="text-button" onClick={cancelVoiceTranscription}>Stop transcription</button>}</div></div>}
-            {title.length > 0 && <div className="composer-options">
-              <div className="chip-row" aria-label="When"><span className="chip-group-label">When</span>{([['today', 'Today'], ['tomorrow', 'Tomorrow'], ['weekend', 'This weekend'], ['next-week', 'Next week']] as const).map(([key, label]) => <button type="button" disabled={!isOnline} key={key} className={`choice-chip ${draft.due_at && ((key === 'today' && !draft.due_is_approx && localDateInput(draft.due_at) === localDateInput(dateForChoice('today').due_at)) || (key === 'tomorrow' && !draft.due_is_approx && localDateInput(draft.due_at) === localDateInput(dateForChoice('tomorrow').due_at)) || (key === 'weekend' && draft.due_is_approx && localDateInput(draft.due_at) === localDateInput(dateForChoice('weekend').due_at)) || (key === 'next-week' && draft.due_is_approx && localDateInput(draft.due_at) === localDateInput(dateForChoice('next-week').due_at))) ? 'active' : ''}`} onClick={() => setWhen(key)}>{label}</button>)}</div>
-              <div className="chip-row detail-row"><label className={`choice-chip date-chip ${draft.due_at && !draft.due_is_approx ? 'active' : ''}`}><CalendarDays size={14} /><span>Pick date</span><input aria-label="Pick date" type="date" disabled={!isOnline} value={localDateInput(draft.due_at)} onChange={e => setDraft(d => ({ ...d, due_at: e.target.value ? new Date(`${e.target.value}T12:00:00`).toISOString() : null, due_is_approx: false }))} /></label>
-                <label className="select-chip"><Clock3 size={14} /><span className="sr-only">Size</span><select aria-label="Size" value={draft.size ?? ''} disabled={!isOnline} onChange={e => setDraft(d => ({ ...d, size: (e.target.value || null) as Task['size'] }))}><option value="">Size</option><option value="quick">Quick</option><option value="hour">An hour</option><option value="big">Big</option></select></label>
-                <button type="button" disabled={!isOnline} className={`choice-chip icon-chip ${draft.is_important ? 'starred' : ''}`} aria-label={draft.is_important ? 'Remove Important' : 'Mark Important'} aria-pressed={draft.is_important} onClick={() => setDraft(d => ({ ...d, is_important: !d.is_important }))}><Star size={15} />Important</button>
-                <label className="select-chip label-select"><span className="sr-only">Label</span><select aria-label="Label" value={draft.label_id ?? ''} disabled={!isOnline} onChange={e => setDraft(d => ({ ...d, label_id: e.target.value || null }))}><option value="">Label</option>{labels.map(label => <option value={label.id} key={label.id}>{label.name}</option>)}</select></label>
-                <button type="button" className="text-button manage-labels" disabled={!isOnline} onClick={() => setLabelEditor(v => !v)}>Edit labels</button>
-              </div>
-              {labelEditor && <div className="label-manager"><div className="label-form"><label htmlFor="new-label">New label</label><input id="new-label" disabled={!isOnline} value={newLabel} maxLength={32} onChange={e => setNewLabel(e.target.value)} placeholder="Label name"/><button type="button" disabled={!isOnline} className="secondary-button" onClick={() => void createLabel()}>Add label</button><button type="button" className="icon-button" aria-label="Close label editor" onClick={() => setLabelEditor(false)}><X size={16}/></button></div><div className="label-list">{labels.map(label => <div className="label-admin-row" key={label.id}><span className="label-tag">{label.name}</span><input aria-label={`Rename ${label.name}`} disabled={!isOnline} defaultValue={label.name} maxLength={32} onBlur={e => void renameLabel(label, e.target.value)} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }}/><button disabled={!isOnline} className="icon-button" aria-label={`Remove label ${label.name}`} onClick={() => void deleteLabel(label)}><Trash2 size={15}/></button></div>)}</div></div>}
-            </div>}
-          </form>}
+          <Composer ref={composerRef} labels={labels} isOnline={isOnline} busy={busy} onSubmit={addTask} onCreateLabel={createLabel} onRenameLabel={renameLabel} onDeleteLabel={deleteLabel}/>
           {error && <div className="error-banner" role="alert">{error}<button className="text-button" disabled={!isOnline || pushBusy} onClick={() => retryPushSetup === null ? void load() : void setupPush(retryPushSetup)}>Retry</button></div>}
+          <div key={view} className="view-enter">
           {view === 'Today' && <section className="day-strip" aria-label="Choose a day">{todayDays.map(day => {
-            const count = tasks.filter(task => !task.deleted_at && task.status === 'open' && isDueOnDay(task, day)).length
+            const count = taskCounts.perDay.get(localDayKey(day)) ?? 0
             return <button type="button" key={day.toISOString()} className={`day-strip-item ${isSameLocalDay(day, selectedDay) ? 'selected' : ''}`} aria-pressed={isSameLocalDay(day, selectedDay)} onClick={() => setSelectedDay(day)}><span>{isSameLocalDay(day, new Date()) ? 'Today' : day.toLocaleDateString(undefined, { weekday: 'short' })}</span><strong>{day.getDate()}</strong><span className="day-strip-count">{count || ' '}</span></button>
           })}</section>}
           {view === 'Today' && <div className="today-split">
             {basicTasks.length > 0 && <aside className="quick-details-prompt"><span>{basicTasks.length} {basicTasks.length === 1 ? 'task is' : 'tasks are'} just titles. Add details?</span><button className="secondary-button" onClick={() => setQuickDetailsTaskId(basicTasks[0].id)}>Quick details</button></aside>}
             {selectedQuickTask && <section className="quick-details-card" aria-label="Quick details"><p className="eyebrow">Quick details · {basicTasks.findIndex(task => task.id === selectedQuickTask.id) + 1} of {basicTasks.length}</p><h2>{selectedQuickTask.title}</h2>{selectedQuickTask.due_at && selectedQuickTask.due_is_approx && <div className="chip-row"><span className="chip-group-label">Choose a day</span>{Array.from({ length: 7 }, (_, index) => addLocalDays(startOfLocalWeek(new Date(selectedQuickTask.due_at!)), index)).filter(day => day >= startOfLocalDay(new Date())).map(day => <button key={day.toISOString()} className="choice-chip" onClick={() => void updateTask(selectedQuickTask, { due_at: new Date(day.getFullYear(), day.getMonth(), day.getDate(), 12).toISOString(), due_is_approx: false })}>{day.toLocaleDateString(undefined, { weekday: 'short' })} {day.getDate()}</button>)}</div>}
-              <div className="chip-row"><label className="choice-chip date-chip"><CalendarDays size={14}/><span>When</span><input aria-label="When" type="date" value={localDateInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { due_at: e.target.value ? new Date(`${e.target.value}T12:00:00`).toISOString() : null, due_is_approx: false })}/></label><label className="select-chip"><span>Size</span><select aria-label="Size" value={selectedQuickTask.size ?? ''} onChange={e => void updateTask(selectedQuickTask, { size: (e.target.value || null) as Task['size'] })}><option value="">Not set</option><option value="quick">Quick</option><option value="hour">An hour</option><option value="big">Big</option></select></label><button className={`choice-chip ${selectedQuickTask.is_important ? 'starred' : ''}`} aria-pressed={selectedQuickTask.is_important} onClick={() => void updateTask(selectedQuickTask, { is_important: !selectedQuickTask.is_important })}><Star size={15}/>Important</button><label className="select-chip"><span>Label</span><select aria-label="Label" value={selectedQuickTask.label_id ?? ''} onChange={e => void updateTask(selectedQuickTask, { label_id: e.target.value || null })}><option value="">None</option>{labels.map(label => <option key={label.id} value={label.id}>{label.name}</option>)}</select></label></div><div className="quick-details-actions"><button className="text-button" onClick={() => void finishQuickDetails(true)}>Skip</button><button className="primary-button" onClick={() => void finishQuickDetails(false)}>Done</button></div></section>}
+              <div className="chip-row"><label className="choice-chip date-chip"><CalendarDays size={14}/><span>When</span><input aria-label="When" type="date" value={localDateInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { due_at: e.target.value ? new Date(`${e.target.value}T12:00:00`).toISOString() : null, due_is_approx: false })}/></label><label className="select-chip"><span>Due time</span><input aria-label="Due time" type="time" value={localTimeInput(selectedQuickTask.due_at)} onChange={e => e.target.value && void updateTask(selectedQuickTask, { due_at: withLocalTime(selectedQuickTask.due_at, e.target.value), due_is_approx: false })}/></label><label className="select-chip"><span>Size</span><select aria-label="Size" value={selectedQuickTask.size ?? ''} onChange={e => void updateTask(selectedQuickTask, { size: (e.target.value || null) as Task['size'] })}><option value="">Not set</option><option value="quick">Quick</option><option value="hour">An hour</option><option value="big">Big</option></select></label><button className={`choice-chip ${selectedQuickTask.is_important ? 'starred' : ''}`} aria-pressed={selectedQuickTask.is_important} onClick={() => void updateTask(selectedQuickTask, { is_important: !selectedQuickTask.is_important })}><Star size={15}/>Important</button><label className="select-chip"><span>Label</span><select aria-label="Label" value={selectedQuickTask.label_id ?? ''} onChange={e => void updateTask(selectedQuickTask, { label_id: e.target.value || null })}><option value="">None</option>{labels.map(label => <option key={label.id} value={label.id}>{label.name}</option>)}</select></label></div><div className="quick-details-actions"><button className="text-button" onClick={() => void finishQuickDetails(true)}>Skip</button><button className="primary-button" onClick={() => void finishQuickDetails(false)}>Done</button></div></section>}
             <section className="day-pane"><div className="pane-heading"><div><p className="eyebrow">Selected day</p><h2>{isSameLocalDay(selectedDay, new Date()) ? 'Today' : todayLabel}</h2></div></div>
-              {oneThing && <article className={`one-thing-card ${completingTaskId === oneThing.id ? 'task-completing' : ''}`}><p className="eyebrow">One thing to start with</p><h3>{oneThing.title}</h3><p className="one-thing-reason">{oneThing.is_important ? 'Important' : oneThing.size ? (oneThing.size === 'quick' ? 'Quick task' : oneThing.size === 'hour' ? 'About an hour' : 'A bigger task') : `Due ${isSameLocalDay(selectedDay, new Date()) ? 'today' : selectedDay.toLocaleDateString(undefined, { weekday: 'long' })}`}</p><div className="one-thing-actions"><button className="secondary-button accent-outline-button" disabled={!isOnline} onClick={() => void completeTask(oneThing)}>Done</button><button className="secondary-button" disabled={!isOnline} onClick={() => void moveOneThingToTomorrow(oneThing)}>Tomorrow</button></div></article>}
+              {oneThing && <article key={oneThing.id} className={`one-thing-card ${completingTaskId === oneThing.id ? 'task-completing' : ''}`}><p className="eyebrow">One thing to start with</p><h3>{oneThing.title}</h3><p className="one-thing-reason">{oneThing.is_important ? 'Important' : oneThing.size ? (oneThing.size === 'quick' ? 'Quick task' : oneThing.size === 'hour' ? 'About an hour' : 'A bigger task') : `Due ${isSameLocalDay(selectedDay, new Date()) ? 'today' : selectedDay.toLocaleDateString(undefined, { weekday: 'long' })}`}</p><div className="one-thing-actions"><button className="secondary-button accent-outline-button" disabled={!isOnline} onClick={() => void completeTask(oneThing)}>Done</button><button className="secondary-button" disabled={!isOnline} onClick={() => void moveOneThingToTomorrow(oneThing)}>Tomorrow</button></div></article>}
               {renderTaskRows(remainingTodayTasks, `Other tasks for ${todayLabel}`, oneThing ? 'No other tasks for this day.' : 'Nothing is planned for this day.')}
               {missedTasks.length > 0 && <section className="missed-list"><h3>Missed</h3>{renderTaskRows(missedTasks, 'Missed tasks')}</section>}
             </section>
@@ -817,12 +690,13 @@ function App() {
           </div>}
           {view === 'This week' && <section className="week-view"><div className="pane-heading"><div><p className="eyebrow">Monday–Sunday</p><h2>This week</h2></div></div>{renderWeekAgenda(visibleTasks)}</section>}
           {(view === 'Inbox' || view === 'Later' || view === 'Done') && renderTaskRows(visibleTasks, view)}
-          {view === 'Done' && <section className="removed-section"><h2><ArchiveRestore size={17}/>Recently removed</h2>{deletedTasks.length ? deletedTasks.map(task => <div className="removed-row" key={task.id}><span>{task.title}</span><button className="secondary-button" disabled={!isOnline} onClick={() => void restoreTask(task)}><RotateCcw size={14}/>Restore</button></div>) : <p className="removed-empty">Removed tasks can be restored here.</p>}</section>}
+          {view === 'Done' && <section className="removed-section"><h2><ArchiveRestore size={17}/>Recently removed</h2>{deletedTasks.length ? deletedTasks.map(task => <div className="removed-row" key={task.id}><span>{task.title}</span><button className="secondary-button" disabled={!isOnline} onClick={() => void restoreTask(task)}><RotateCcw size={14}/>Restore</button></div>) : tasksLoaded ? <p className="removed-empty">Removed tasks can be restored here.</p> : <><span className="sr-only" role="status">Loading tasks</span><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/></>}</section>}
+          </div>
         </div>
       </main>
     </div>
     {toast && <div className={`toast ${toastClosing ? 'toast-closing' : ''}`} role="status"><span>{toast.text}</span>{toast.edit && <button onClick={() => { toast.edit?.(); setToast(null) }}>Edit</button>}<button disabled={!isOnline} onClick={() => { void toast.undo(); setToast(null) }}>Undo</button></div>}
-    <nav className="mobile-tabs" aria-label="Task views">{tabs.map(tab => <button key={tab} className={view === tab ? 'active' : ''} onClick={() => chooseView(tab)}><span className={`nav-symbol ${tab.toLowerCase().replace(' ', '-')}`} />{tab}</button>)}</nav>
+    <nav className="mobile-tabs" aria-label="Task views">{tabs.map(tab => <button key={tab} className={view === tab ? 'active' : ''} aria-current={view === tab ? 'page' : undefined} onClick={() => chooseView(tab)}>{tab === 'Today' ? <Sun size={16}/> : tab === 'Inbox' ? <Inbox size={16}/> : tab === 'Later' ? <Clock size={16}/> : tab === 'This week' ? <CalendarRange size={16}/> : <CircleCheck size={16}/>} {tab}</button>)}</nav>
   </div>
 }
 

@@ -11,6 +11,7 @@ type WorkerMessage = {
   audio?: Float32Array
   sampleRate?: number
   requestId?: number
+  kind?: 'draft' | 'final'
   type?: string
   state?: string
   text?: string
@@ -143,5 +144,28 @@ describe('on-device speech worker', () => {
     const onmessage = await startWorker()
     await onmessage({ data: { type: 'preload' } })
     expect(messages()).toContainEqual(expect.objectContaining({ state: 'preloaded' }))
+  })
+
+  it('serializes warm-up and transcription inference calls', async () => {
+    let active = 0
+    let maximumActive = 0
+    const resolvers: Array<(value: { text: string }) => void> = []
+    const transcriber = vi.fn(() => {
+      active++; maximumActive = Math.max(maximumActive, active)
+      return new Promise<{ text: string }>(resolve => resolvers.push(value => { active--; resolve(value) }))
+    })
+    pipelineMock.mockResolvedValue(transcriber)
+    const onmessage = await startWorker()
+    const preload = onmessage({ data: { type: 'preload' } })
+    await vi.waitFor(() => expect(transcriber).toHaveBeenCalledTimes(1))
+    const recording = onmessage({ data: { audio: new Float32Array(16000), sampleRate: 16000, requestId: 44, kind: 'final' } })
+    await Promise.resolve()
+    expect(transcriber).toHaveBeenCalledTimes(1)
+    resolvers.shift()?.({ text: '' })
+    await vi.waitFor(() => expect(transcriber).toHaveBeenCalledTimes(2))
+    resolvers.shift()?.({ text: 'serialized' })
+    await Promise.all([preload, recording])
+    expect(maximumActive).toBe(1)
+    expect(messages()).toContainEqual(expect.objectContaining({ requestId: 44, kind: 'final', text: 'serialized' }))
   })
 })

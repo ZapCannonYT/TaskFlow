@@ -91,12 +91,15 @@ async function warmTranscriber(loaded: Transcriber) {
   return performance.now() - warmupStarted
 }
 
-scope.onmessage = async event => {
-  const { audio, sampleRate, requestId, type } = event.data as {
+let messageQueue: Promise<void> = Promise.resolve()
+
+async function handleMessage(event: MessageEvent) {
+  const { audio, sampleRate, requestId, type, kind } = event.data as {
     audio?: Float32Array
     sampleRate?: number
     requestId?: number
     type?: string
+    kind?: 'draft' | 'final'
   }
 
   if (type === 'preload') {
@@ -129,8 +132,15 @@ scope.onmessage = async event => {
     const inferStarted = performance.now()
     const result = await (activeTranscriber as unknown as (input: Float32Array) => Promise<{ text?: string }>)(waveform)
     const inferMs = performance.now() - inferStarted
-    scope.postMessage({ text: result.text?.trim() ?? '', requestId, timings: { resampleMs, inferMs } })
+    scope.postMessage({ text: result.text?.trim() ?? '', requestId, kind, timings: { resampleMs, inferMs } })
   } catch (error) {
     scope.postMessage({ error: error instanceof Error ? error.message : String(error), requestId })
   }
+}
+
+scope.onmessage = event => {
+  messageQueue = messageQueue.then(() => handleMessage(event)).catch(error => {
+    scope.postMessage({ error: error instanceof Error ? error.message : String(error), requestId: (event.data as { requestId?: number }).requestId })
+  })
+  return messageQueue
 }
