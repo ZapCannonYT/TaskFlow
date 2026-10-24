@@ -1,11 +1,11 @@
-# Taskflow Phase 3
+# Taskflow
 
 Taskflow is a responsive, installable React app backed by Supabase Auth and Postgres. It includes task capture, Inbox/Today/Later/This week/Done views, per-user labels, soft delete/restore, live updates between open clients, explicit due-date reminders, and an optional daily companion nudge. Task ranking is deterministic and uses documented rules; it does not use AI.
 
 ## Run locally
 
 1. Create a Supabase project.
-2. In its SQL editor, run the Phase 1 migration if you have not already. For Phase 3, follow the ordered setup below: deploy the functions and set secrets, run the schema migration, add Vault values, then install the separate scheduler migration. This prevents cron from calling an unconfigured endpoint.
+2. In its SQL editor, run the Phase 1 migration if you have not already. For Phase 3, follow the ordered setup below: deploy the functions and set secrets, run the schema migration, add Vault values, then install the separate scheduler migration. This prevents cron from calling an unconfigured endpoint. Also apply `20261022020000_phase4_voice_phase5_quick_details.sql` and `20261024000000_phase5_recurrence.sql` in order; recurrence controls do not work until the latter migration is applied.
 3. Copy `.env.example` to `.env` and set `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, and (after Phase 3 push setup) `VITE_VAPID_PUBLIC_KEY`. The VAPID public key is safe in the browser; never put a secret, VAPID private key, dispatch token, or service-role key in a `VITE_` variable.
 4. Install and start:
 
@@ -53,3 +53,9 @@ Run `supabase/migrations/20261022010000_phase3_schedule_dispatch.sql` in the SQL
 For Cloudflare Pages, set `VITE_VAPID_PUBLIC_KEY` as a build environment variable for the production and preview environments. The private VAPID key and dispatch secret stay only in Supabase Edge Function secrets.
 
 In Taskflow, create at least one task, choose **Yes** on the optional daily-nudge invitation, then use **Settings → Send test notification**. A browser permission prompt appears only after choosing Yes or turning the daily nudge on in Settings. Explicit reminders are optional and appear after opening a task with a specific date.
+
+## Phase 5 and Phase 6 features
+
+Recurring tasks can be set to daily, weekdays, weekly, or monthly from the add-task details, Quick details, or task editor. Completing an occurrence creates its next dated occurrence; Undo removes that next occurrence and reopens the completed task. Monthly repeats preserve the original day of the month when possible (for example, a task on the 31st moves to the last day of shorter months).
+
+Task titles can include explicit dates and times such as `Call Sam tomorrow at 3pm`, `Review notes next Monday`, `Pay rent on Oct 24`, or `Submit report at 15:30`. Taskflow puts the date/time in the deadline fields and saves only the remaining title. Installed PWAs can also receive shared text or a link through the system Share menu. Export and restore are available in **Settings**. Offline task writes remain disabled until a conflict policy is designed.

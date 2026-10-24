@@ -29,7 +29,7 @@ describe('live voice session', () => {
 
   it('ignores a draft after its utterance was committed', () => {
     const session = createLiveSession('')
-    session.pushAudio(speech(6400), 16000, 0.02, 0)
+    session.pushAudio(speech(14400), 16000, 0.02, 0)
     const draft = session.nextAction(0, false)
     expect(draft.type).toBe('draft')
     session.pushAudio(speech(1), 16000, 0.02, 100)
@@ -41,9 +41,9 @@ describe('live voice session', () => {
 
   it('ignores older draft sequences', () => {
     const session = createLiveSession('')
-    session.pushAudio(speech(6400), 16000, 0.02, 0)
+    session.pushAudio(speech(14400), 16000, 0.02, 0)
     const oldDraft = session.nextAction(0, false)
-    session.pushAudio(speech(6400), 16000, 0.02, 600)
+    session.pushAudio(speech(14400), 16000, 0.02, 600)
     const newDraft = session.nextAction(600, false)
     if (oldDraft.type !== 'draft' || newDraft.type !== 'draft') throw new Error('expected draft actions')
     session.onDraftResult(oldDraft.utteranceId, oldDraft.seq, 'old text', 10)
@@ -59,7 +59,7 @@ describe('live voice session', () => {
     expect(final).toHaveLength(1)
     session.onFinalResult(final[0].utteranceId, '  call the dentist  ')
     expect(session.getText()).toBe('existing task call the dentist')
-    session.pushAudio(speech(6400), 16000, 0.02, 1000)
+    session.pushAudio(speech(14400), 16000, 0.02, 1000)
     const draft = session.nextAction(1000, false)
     if (draft.type === 'draft') session.onDraftResult(draft.utteranceId, draft.seq, 'tomorrow', 50)
     expect(session.getText()).toBe('existing task call the dentist tomorrow')
@@ -67,7 +67,7 @@ describe('live voice session', () => {
 
   it('caps the assembled title at 500 characters', () => {
     const session = createLiveSession('x'.repeat(498))
-    session.pushAudio(speech(6400), 16000, 0.02, 0)
+    session.pushAudio(speech(14400), 16000, 0.02, 0)
     const draft = session.nextAction(0, false)
     if (draft.type === 'draft') session.onDraftResult(draft.utteranceId, draft.seq, 'long text', 10)
     expect(session.getText()).toHaveLength(500)
@@ -77,7 +77,7 @@ describe('live voice session', () => {
     const session = createLiveSession('')
     for (let index = 0; index < 3; index++) {
       const now = index * 700
-      session.pushAudio(speech(6400), 16000, 0.02, now)
+      session.pushAudio(speech(14400), 16000, 0.02, now)
       const action = session.nextAction(now, false)
       if (action.type === 'draft') session.onDraftResult(action.utteranceId, action.seq, 'draft', 901)
     }
@@ -86,7 +86,30 @@ describe('live voice session', () => {
 
   it('does not draft while another inference is active', () => {
     const session = createLiveSession('')
-    session.pushAudio(speech(6400), 16000, 0.02, 0)
+    session.pushAudio(speech(14400), 16000, 0.02, 0)
     expect(session.nextAction(0, true).type).toBe('none')
+  })
+
+  it('waits for enough speech before creating an early draft', () => {
+    const session = createLiveSession('')
+    session.pushAudio(speech(6400), 16000, 0.02, 0)
+    expect(session.nextAction(500, false).type).toBe('none')
+    session.pushAudio(speech(8000), 16000, 0.02, 500)
+    expect(session.nextAction(500, false).type).toBe('draft')
+  })
+
+  it('reveals only words repeated by consecutive draft transcriptions', () => {
+    const session = createLiveSession('')
+    session.pushAudio(speech(14400), 16000, 0.02, 0)
+    const first = session.nextAction(0, false)
+    if (first.type !== 'draft') throw new Error('expected first draft')
+    session.onDraftResult(first.utteranceId, first.seq, 'call the dentist tomorrow', 50)
+    expect(session.getStableText()).toBe('')
+
+    session.pushAudio(speech(6400), 16000, 0.02, 600)
+    const second = session.nextAction(600, false)
+    if (second.type !== 'draft') throw new Error('expected second draft')
+    session.onDraftResult(second.utteranceId, second.seq, 'call the dentist tomorrow morning', 50)
+    expect(session.getStableText()).toBe('call the dentist tomorrow')
   })
 })

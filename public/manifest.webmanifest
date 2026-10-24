@@ -6,6 +6,12 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "share_target": {
+    "action": "/?share=1",
+    "method": "GET",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": { "title": "title", "text": "text", "url": "url" }
+  },
   "shortcuts": [{ "name": "Add by voice", "short_name": "Voice task", "description": "Capture a task by speaking", "url": "/?capture=voice", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }],
   "background_color": "#ECEBE6",
   "theme_color": "#ECEBE6",

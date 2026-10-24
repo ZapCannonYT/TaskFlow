@@ -36,7 +36,7 @@ export function useVoiceCapture({ isOnline, onText }: { isOnline: boolean; onTex
     if (!jobsRef.current) return
     if (status.fallbacks > activeFallbacksRef.current) setMessage('Switching to the compatible on-device model…')
     else if (status.state === 'loading') setMessage('Getting voice ready…')
-    else if (status.state === 'downloading') setMessage(`Getting voice ready… ${Math.round(status.progress ?? 0)}%`)
+    else if (status.state === 'downloading') setMessage('Downloading voice model… this may take a moment.')
     else if (status.state === 'ready') setMessage('Transcribing on this device…')
   }), [])
 
@@ -72,8 +72,9 @@ export function useVoiceCapture({ isOnline, onText }: { isOnline: boolean; onTex
       if (action.type === 'draft') session.onDraftResult(action.utteranceId, action.seq, result.text, result.timings?.inferMs ?? 0)
       else session.onFinalResult(action.utteranceId, result.text)
       const text = session.getText()
-      onText(text)
-      if (text) { hasTranscriptRef.current = true; setHasTranscript(true) }
+      if (action.type === 'draft') onText(session.getStableText())
+      else onText(text)
+      if (action.type === 'commit' && text) { hasTranscriptRef.current = true; setHasTranscript(true) }
       if (!session.draftsEnabled() && !endedRef.current) setMessage('Live text is slow on this device. Text will appear after each pause.')
       else if (statusRef.current.fallbacks > fallbacks) setMessage('Switching to the compatible on-device model…')
       else if (endedRef.current) setMessage('Finishing the transcript…')
@@ -131,7 +132,7 @@ export function useVoiceCapture({ isOnline, onText }: { isOnline: boolean; onTex
         }
         if (frameRef.current === null) frameRef.current = requestAnimationFrame(updateMeter)
         if (rms > SPEECH_RMS) lastVoiceRef.current = now
-        if (shouldStop(now, lastVoiceRef.current, startedRef.current) || now - startedRef.current > 45000) { stop(); return }
+        if (shouldStop(now, lastVoiceRef.current, startedRef.current)) { stop(); return }
       }
       let workletConnected = false
       if (context.audioWorklet) {

@@ -3,6 +3,7 @@ import { ArchiveRestore, CalendarDays, CalendarRange, Check, CircleCheck, Clock,
 import { isSupabaseConfigured, Label, PushSubscriptionRow, supabase, Task, UserPreferences } from './lib/supabase'
 import { addLocalDays, classifyView, dateForChoice, getSevenDays, isDueOnDay, isMissed, isSameLocalDay, rankOneThing, startOfLocalDay, startOfLocalWeek } from './lib/dates'
 import { needsDetailsPrompt } from './lib/quickDetails'
+import { nextOccurrence } from './lib/recurrence'
 import { Composer, type ComposerHandle, type DraftDetails } from './components/Composer'
 import { TaskRow } from './components/TaskRow'
 
@@ -102,6 +103,7 @@ function App() {
   const [pushBusy, setPushBusy] = useState(false)
   const [quickDetailsTaskId, setQuickDetailsTaskId] = useState<string | null>(null)
   const composerRef = useRef<ComposerHandle>(null)
+  const completionTimersRef = useRef(new Map<string, number>())
   const [notificationMessage, setNotificationMessage] = useState('')
   const [retryPushSetup, setRetryPushSetup] = useState<boolean | null>(null)
 
@@ -467,19 +469,9 @@ function App() {
     handledNotificationAction.current = true
     void (async () => {
       if (action === 'done' && taskId) {
-        const completedAt = new Date().toISOString()
-        const result = await supabase!.from('tasks').update({ status: 'completed', completed_at: completedAt, updated_at: completedAt }).eq('id', taskId).eq('status', 'open')
-        if (result.error) setError(`Task could not be completed · ${result.error.message}`)
-        else {
-          setTasks(current => current.map(task => task.id === taskId ? { ...task, status: 'completed', completed_at: completedAt } : task))
-          const client = supabase!
-          setToast({ text: `Done “${taskId ? tasks.find(task => task.id === taskId)?.title ?? 'task' : 'task'}”`, undo: async () => {
-            const restoredAt = new Date().toISOString()
-            const undone = await client.from('tasks').update({ status: 'open', completed_at: null, updated_at: restoredAt }).eq('id', taskId)
-            if (!undone.error) setTasks(current => current.map(task => task.id === taskId ? { ...task, status: 'open', completed_at: null } : task))
-            else setError(`Not saved · ${undone.error.message}`)
-          } })
-        }
+        const result = await supabase!.from('tasks').select('*, labels(name)').eq('id', taskId).maybeSingle()
+        if (result.error || !result.data) setError(`Task could not be completed · ${result.error?.message ?? 'Task not found.'}`)
+        else await completeTask(result.data as Task)
       } else if (action === 'later' && taskId) {
         const due = dateForChoice('tomorrow')
         const result = await supabase!.from('tasks').update({ ...due, updated_at: new Date().toISOString() }).eq('id', taskId).eq('status', 'open')
@@ -498,6 +490,15 @@ function App() {
   useEffect(() => {
     if (!signedIn) return
     const params = new URLSearchParams(window.location.search)
+    if (params.has('share')) {
+      const title = params.get('title')?.trim() ?? ''
+      const text = params.get('text')?.trim() ?? ''
+      const url = params.get('url')?.trim() ?? ''
+      const shared = [...new Set([title, text, url].filter(Boolean))].join(' ')
+      if (shared) { composerRef.current?.setTitle(shared); composerRef.current?.focus() }
+      params.delete('share'); params.delete('title'); params.delete('text'); params.delete('url')
+      window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`)
+    }
     const quickDetailsId = params.get('quick_details')
     if (quickDetailsId) { setQuickDetailsTaskId(quickDetailsId); setViewState('Today'); params.delete('quick_details'); window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`) }
     if (params.get('capture') === 'voice') { params.delete('capture'); window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`); window.setTimeout(() => composerRef.current?.startVoice(), 300) }
@@ -512,24 +513,67 @@ function App() {
     if (values.reminder_offset && values.reminder_offset !== 'none' && !currentPushEndpoint) void setupPush(false)
   }
 
+  function setQuickTaskRepeat(value: string) {
+    if (!selectedQuickTask) return
+    const recurrence_rule = (value || null) as Task['recurrence_rule']
+    void updateTask(selectedQuickTask, {
+      recurrence_rule,
+      ...(recurrence_rule ? {
+        due_is_approx: false,
+        ...(!selectedQuickTask.due_at ? { due_at: withLocalTime(dateForChoice('today').due_at, '12:00') } : {}),
+      } : {}),
+    })
+  }
+
+  async function reopenTask(task: Task, knownNext?: Task | null) {
+    if (!supabase || !isOnline) return
+    const timer = completionTimersRef.current.get(task.id)
+    if (timer !== undefined) { window.clearTimeout(timer); completionTimersRef.current.delete(task.id) }
+    const client = supabase
+    const nextTask = knownNext ?? tasks.find(item => item.recurrence_parent_id === task.id && item.status === 'open' && !item.deleted_at) ?? null
+    const restoredAt = new Date().toISOString()
+    if (nextTask) {
+      const removed = await client.from('tasks').update({ deleted_at: restoredAt, updated_at: restoredAt }).eq('id', nextTask.id).eq('status', 'open').is('deleted_at', null)
+      if (removed.error) { setError(`Could not undo the next occurrence · ${removed.error.message}`); return }
+    }
+    const undone = await client.from('tasks').update({ status: 'open', completed_at: null, updated_at: restoredAt }).eq('id', task.id).eq('status', 'completed').is('deleted_at', null)
+    if (undone.error) {
+      if (nextTask) await client.from('tasks').update({ deleted_at: null, updated_at: new Date().toISOString() }).eq('id', nextTask.id)
+      setError(`Not saved · ${undone.error.message}`); return
+    }
+    setTasks(current => current.filter(item => item.id !== nextTask?.id).map(item => item.id === task.id ? { ...item, status: 'open', completed_at: null } : item))
+  }
+
   async function completeTask(task: Task) {
     if (!supabase || !isOnline || completingTaskId) return
     const client = supabase
     const completedAt = new Date().toISOString()
     setCompletingTaskId(task.id)
-    const { error: updateError } = await client.from('tasks').update({ status: 'completed', completed_at: completedAt, updated_at: completedAt }).eq('id', task.id)
-    if (updateError) { setCompletingTaskId(null); setNewTaskId(task.id); window.setTimeout(() => setNewTaskId(current => current === task.id ? null : current), 160); setError(`Not saved · ${updateError.message}`); return }
-    setToast({ text: `Done “${task.title}”`, undo: async () => {
-      const restoredAt = new Date().toISOString()
-      const undone = await client.from('tasks').update({ status: 'open', completed_at: null, updated_at: restoredAt }).eq('id', task.id)
-      if (!undone.error) setTasks(current => current.map(item => item.id === task.id ? { ...item, status: 'open', completed_at: null } : item))
-      else setError(`Not saved · ${undone.error.message}`)
-    } })
+    const { data: completedRow, error: updateError } = await client.from('tasks').update({ status: 'completed', completed_at: completedAt, updated_at: completedAt }).eq('id', task.id).eq('status', 'open').is('deleted_at', null).select('id').maybeSingle()
+    if (updateError || !completedRow) { setCompletingTaskId(null); setNewTaskId(task.id); window.setTimeout(() => setNewTaskId(current => current === task.id ? null : current), 160); setError(updateError ? `Not saved · ${updateError.message}` : 'This task was already changed on another device. Refresh and try again.'); return }
+    let nextTask: Task | null = null
+    if (task.recurrence_rule && task.due_at) {
+      const next = await client.from('tasks').insert({
+        user_id: task.user_id, title: task.title, status: 'open', due_at: nextOccurrence(task.recurrence_rule, task.due_at, task.recurrence_day ?? new Date(task.due_at).getDate()),
+        due_is_approx: false, is_all_day: task.is_all_day, timezone: task.timezone, size: task.size,
+        is_important: task.is_important, label_id: task.label_id, reminder_offset: task.reminder_offset,
+        recurrence_rule: task.recurrence_rule, recurrence_parent_id: task.id, recurrence_day: task.recurrence_day ?? new Date(task.due_at).getDate(),
+        details_prompted_at: task.details_prompted_at ?? completedAt,
+      }).select('*, labels(name)').single()
+      if (next.error) {
+        await client.from('tasks').update({ status: 'open', completed_at: null, updated_at: new Date().toISOString() }).eq('id', task.id)
+        setCompletingTaskId(null); setError(`Repeat could not be scheduled · ${next.error.message}`); return
+      }
+      nextTask = next.data as Task
+    }
+    setToast({ text: `Done “${task.title}”`, undo: async () => { await reopenTask(task, nextTask) } })
     const completeAnimMs = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 220
-    window.setTimeout(() => {
-      setTasks(current => current.map(item => item.id === task.id ? { ...item, status: 'completed', completed_at: completedAt } : item))
+    const timer = window.setTimeout(() => {
+      setTasks(current => [ ...(nextTask ? [nextTask] : []), ...current.map(item => item.id === task.id ? { ...item, status: 'completed' as const, completed_at: completedAt } : item) ])
       setCompletingTaskId(null)
+      completionTimersRef.current.delete(task.id)
     }, completeAnimMs)
+    completionTimersRef.current.set(task.id, timer)
   }
 
   async function removeTask(task: Task) {
@@ -577,13 +621,13 @@ function App() {
     }
   }
 
-  const rowActionsRef = useRef({ updateTask, completeTask, removeTask })
-  rowActionsRef.current = { updateTask, completeTask, removeTask }
+  const rowActionsRef = useRef({ updateTask, completeTask, reopenTask, removeTask })
+  rowActionsRef.current = { updateTask, completeTask, reopenTask, removeTask }
   const onToggleTaskExpand = useCallback((id: string) => setExpanded(current => current === id ? null : id), [])
   const onRowUpdate = useCallback((task: Task, values: Partial<Task>) => { void rowActionsRef.current.updateTask(task, values) }, [])
   const onRowComplete = useCallback((task: Task) => {
     if (task.status === 'open') void rowActionsRef.current.completeTask(task)
-    else void rowActionsRef.current.updateTask(task, { status: 'open', completed_at: null })
+    else void rowActionsRef.current.reopenTask(task)
   }, [])
   const onRowRemove = useCallback((task: Task) => { void rowActionsRef.current.removeTask(task) }, [])
 
@@ -680,7 +724,7 @@ function App() {
           {view === 'Today' && <div className="today-split">
             {basicTasks.length > 0 && <aside className="quick-details-prompt"><span>{basicTasks.length} {basicTasks.length === 1 ? 'task is' : 'tasks are'} just titles. Add details?</span><button className="secondary-button" onClick={() => setQuickDetailsTaskId(basicTasks[0].id)}>Quick details</button></aside>}
             {selectedQuickTask && <section className="quick-details-card" aria-label="Quick details"><p className="eyebrow">Quick details · {basicTasks.findIndex(task => task.id === selectedQuickTask.id) + 1} of {basicTasks.length}</p><h2>{selectedQuickTask.title}</h2>{selectedQuickTask.due_at && selectedQuickTask.due_is_approx && <div className="chip-row"><span className="chip-group-label">Choose a day</span>{Array.from({ length: 7 }, (_, index) => addLocalDays(startOfLocalWeek(new Date(selectedQuickTask.due_at!)), index)).filter(day => day >= startOfLocalDay(new Date())).map(day => <button key={day.toISOString()} className="choice-chip" onClick={() => void updateTask(selectedQuickTask, { due_at: new Date(day.getFullYear(), day.getMonth(), day.getDate(), 12).toISOString(), due_is_approx: false })}>{day.toLocaleDateString(undefined, { weekday: 'short' })} {day.getDate()}</button>)}</div>}
-              <div className="chip-row"><label className="choice-chip date-chip"><CalendarDays size={14}/><span>When</span><input aria-label="When" type="date" value={localDateInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { due_at: e.target.value ? new Date(`${e.target.value}T12:00:00`).toISOString() : null, due_is_approx: false })}/></label><label className="select-chip"><span>Due time</span><input aria-label="Due time" type="time" value={localTimeInput(selectedQuickTask.due_at)} onChange={e => e.target.value && void updateTask(selectedQuickTask, { due_at: withLocalTime(selectedQuickTask.due_at, e.target.value), due_is_approx: false })}/></label><label className="select-chip"><span>Size</span><select aria-label="Size" value={selectedQuickTask.size ?? ''} onChange={e => void updateTask(selectedQuickTask, { size: (e.target.value || null) as Task['size'] })}><option value="">Not set</option><option value="quick">Quick</option><option value="hour">An hour</option><option value="big">Big</option></select></label><button className={`choice-chip ${selectedQuickTask.is_important ? 'starred' : ''}`} aria-pressed={selectedQuickTask.is_important} onClick={() => void updateTask(selectedQuickTask, { is_important: !selectedQuickTask.is_important })}><Star size={15}/>Important</button><label className="select-chip"><span>Label</span><select aria-label="Label" value={selectedQuickTask.label_id ?? ''} onChange={e => void updateTask(selectedQuickTask, { label_id: e.target.value || null })}><option value="">None</option>{labels.map(label => <option key={label.id} value={label.id}>{label.name}</option>)}</select></label></div><div className="quick-details-actions"><button className="text-button" onClick={() => void finishQuickDetails(true)}>Skip</button><button className="primary-button" onClick={() => void finishQuickDetails(false)}>Done</button></div></section>}
+              <div className="chip-row"><label className="choice-chip date-chip"><CalendarDays size={14}/><span>When</span><input aria-label="When" type="date" value={localDateInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { due_at: e.target.value ? new Date(`${e.target.value}T12:00:00`).toISOString() : null, due_is_approx: false, recurrence_rule: e.target.value ? selectedQuickTask.recurrence_rule : null })}/></label><label className="select-chip"><span>Due time</span><input aria-label="Due time" type="time" value={selectedQuickTask.is_all_day ? "" : localTimeInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { ...(e.target.value ? { due_at: withLocalTime(selectedQuickTask.due_at, e.target.value) } : {}), due_is_approx: false, is_all_day: !e.target.value })}/></label><label className="select-chip"><span>Repeat</span><select aria-label="Repeat" value={selectedQuickTask.recurrence_rule ?? ""} onChange={e => setQuickTaskRepeat(e.target.value)}><option value="">Never</option><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label><label className="select-chip"><span>Size</span><select aria-label="Size" value={selectedQuickTask.size ?? ''} onChange={e => void updateTask(selectedQuickTask, { size: (e.target.value || null) as Task['size'] })}><option value="">Not set</option><option value="quick">Quick</option><option value="hour">An hour</option><option value="big">Big</option></select></label><button className={`choice-chip ${selectedQuickTask.is_important ? 'starred' : ''}`} aria-pressed={selectedQuickTask.is_important} onClick={() => void updateTask(selectedQuickTask, { is_important: !selectedQuickTask.is_important })}><Star size={15}/>Important</button><label className="select-chip"><span>Label</span><select aria-label="Label" value={selectedQuickTask.label_id ?? ''} onChange={e => void updateTask(selectedQuickTask, { label_id: e.target.value || null })}><option value="">None</option>{labels.map(label => <option key={label.id} value={label.id}>{label.name}</option>)}</select></label></div><div className="quick-details-actions"><button className="text-button" onClick={() => void finishQuickDetails(true)}>Skip</button><button className="primary-button" onClick={() => void finishQuickDetails(false)}>Done</button></div></section>}
             <section className="day-pane"><div className="pane-heading"><div><p className="eyebrow">Selected day</p><h2>{isSameLocalDay(selectedDay, new Date()) ? 'Today' : todayLabel}</h2></div></div>
               {oneThing && <article key={oneThing.id} className={`one-thing-card ${completingTaskId === oneThing.id ? 'task-completing' : ''}`}><p className="eyebrow">One thing to start with</p><h3>{oneThing.title}</h3><p className="one-thing-reason">{oneThing.is_important ? 'Important' : oneThing.size ? (oneThing.size === 'quick' ? 'Quick task' : oneThing.size === 'hour' ? 'About an hour' : 'A bigger task') : `Due ${isSameLocalDay(selectedDay, new Date()) ? 'today' : selectedDay.toLocaleDateString(undefined, { weekday: 'long' })}`}</p><div className="one-thing-actions"><button className="secondary-button accent-outline-button" disabled={!isOnline} onClick={() => void completeTask(oneThing)}>Done</button><button className="secondary-button" disabled={!isOnline} onClick={() => void moveOneThingToTomorrow(oneThing)}>Tomorrow</button></div></article>}
               {renderTaskRows(remainingTodayTasks, `Other tasks for ${todayLabel}`, oneThing ? 'No other tasks for this day.' : 'Nothing is planned for this day.')}
