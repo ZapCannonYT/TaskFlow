@@ -117,8 +117,10 @@ function App() {
       workerRef.current = worker
       setVoiceModelState('loading')
       worker.onmessage = event => {
+        if (event.data.state === 'downloading') return
         if (event.data.state === 'preloaded') { setVoiceModelState('ready'); return }
         if (event.data.state === 'preload-error') { setVoiceModelState('error'); return }
+        if (event.data.state) return
       }
       worker.onerror = () => setVoiceModelState('error')
       worker.postMessage({ type: 'preload' })
@@ -345,11 +347,13 @@ function App() {
     const worker = workerRef.current
     voiceWorkerBusyRef.current = true; setVoiceProcessing(true)
     worker.onmessage = event => {
+      if (event.data.state === 'downloading') { setVoiceMessage('Getting voice ready…'); return }
       if (event.data.state === 'loading') { setVoiceModelState('loading'); setVoiceMessage('Getting voice ready…'); return }
       if (event.data.state === 'fallback') { setVoiceMessage('Switching to the compatible on-device model…'); return }
       if (event.data.state === 'transcribing') { setVoiceMessage('Transcribing on this device…'); return }
       if (event.data.state === 'preloaded') { setVoiceModelState('ready'); return }
       if (event.data.state === 'preload-error') { setVoiceModelState('error'); return }
+      if (event.data.state) return
       voiceWorkerBusyRef.current = false
       if (event.data.error) {
         setVoiceModelState('error')

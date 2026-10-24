@@ -1,19 +1,76 @@
 /// <reference lib="webworker" />
-import { pipeline } from '@huggingface/transformers'
+import { env, pipeline } from '@huggingface/transformers'
 import { resampleForWhisper } from './audio'
+import { detectDevice, fallbackChain, pickVoiceModel, type VoiceModelConfig } from './models'
 
 const scope = self as DedicatedWorkerGlobalScope
-let transcriber: Awaited<ReturnType<typeof pipeline>> | null = null
-let transcriberPromise: Promise<Awaited<ReturnType<typeof pipeline>>> | null = null
+type Transcriber = Awaited<ReturnType<typeof pipeline>>
+type ProgressInfo = { status?: string; name?: string; file?: string; progress?: number }
+
+let transcriber: Transcriber | null = null
+let transcriberConfig: VoiceModelConfig | null = null
+let transcriberPromise: Promise<Transcriber> | null = null
+let transcriberLoadMs = 0
+let transcriberWarmupMs = 0
+
+env.useBrowserCache = true
+const customModelHost = import.meta.env.VITE_VOICE_MODEL_HOST?.trim()
+if (customModelHost) {
+  env.remoteHost = customModelHost.endsWith('/') ? customModelHost : `${customModelHost}/`
+  env.remotePathTemplate = '{model}/{file}'
+}
+
+function remoteFileUrl(modelId: string, file: string) {
+  const path = env.remotePathTemplate
+    .replaceAll('{model}', modelId)
+    .replaceAll('{revision}', encodeURIComponent('main'))
+  const relativePath = `${path}${file}`.replace(/^\/+/, '')
+  return new URL(relativePath, env.remoteHost).href
+}
+
+async function isBrowserCacheHit(modelId: string, file: string): Promise<boolean | null> {
+  if (typeof caches === 'undefined') return null
+  try {
+    const cache = await caches.open(env.cacheKey)
+    return Boolean(await cache.match(remoteFileUrl(modelId, file)))
+  } catch {
+    return null
+  }
+}
+
+function progressCallback(modelId: string) {
+  return (info: ProgressInfo) => {
+    if (info.status !== 'progress' || !info.file || typeof info.progress !== 'number') return
+    void isBrowserCacheHit(modelId, info.file).then(cacheHit => {
+      // Transformers.js reports progress for cached reads too; only an absent exact cache key proves a fetch.
+      if (cacheHit === false) scope.postMessage({ state: 'downloading', progress: info.progress })
+    })
+  }
+}
 
 async function loadTranscriber() {
-  let gpuAvailable = false
-  try { gpuAvailable = Boolean(await (navigator as Navigator & { gpu?: { requestAdapter: () => Promise<unknown> } }).gpu?.requestAdapter()) } catch { /* try WASM */ }
-  if (gpuAvailable) {
-    try { return await pipeline('automatic-speech-recognition', 'onnx-community/whisper-base.en', { device: 'webgpu' }) }
-    catch { scope.postMessage({ state: 'fallback' }) }
+  const loadStarted = performance.now()
+  const device = await detectDevice()
+  const first = pickVoiceModel(device)
+  let lastError: unknown
+
+  for (const [index, config] of fallbackChain(first).entries()) {
+    if (index > 0) scope.postMessage({ state: 'fallback' })
+    try {
+      const loaded = await pipeline('automatic-speech-recognition', config.id, {
+        device: config.device,
+        ...(config.dtype ? { dtype: config.dtype as 'q8' | 'fp16' } : {}),
+        progress_callback: progressCallback(config.id),
+      })
+      transcriberLoadMs = performance.now() - loadStarted
+      transcriberConfig = config
+      transcriberWarmupMs = await warmTranscriber(loaded)
+      return loaded
+    } catch (error) {
+      lastError = error
+    }
   }
-  return await pipeline('automatic-speech-recognition', 'onnx-community/whisper-base.en', { device: 'wasm' })
+  throw lastError ?? new Error('No compatible on-device voice model could be loaded.')
 }
 
 function getTranscriber() {
@@ -26,26 +83,53 @@ function getTranscriber() {
   return transcriberPromise
 }
 
+async function warmTranscriber(loaded: Transcriber) {
+  const warmupStarted = performance.now()
+  try {
+    await (loaded as unknown as (input: Float32Array) => Promise<unknown>)(new Float32Array(16000))
+  } catch { /* A silent warm-up can fail for a model without affecting real recordings. */ }
+  return performance.now() - warmupStarted
+}
+
 scope.onmessage = async event => {
-  const { audio, sampleRate, requestId, type } = event.data as { audio?: Float32Array; sampleRate?: number; requestId?: number; type?: string }
+  const { audio, sampleRate, requestId, type } = event.data as {
+    audio?: Float32Array
+    sampleRate?: number
+    requestId?: number
+    type?: string
+  }
+
   if (type === 'preload') {
     scope.postMessage({ state: 'loading' })
     try {
       await getTranscriber()
-      scope.postMessage({ state: 'preloaded' })
+      const config = transcriberConfig!
+      scope.postMessage({
+        state: 'preloaded',
+        model: config.id,
+        device: config.device,
+        dtype: config.dtype ?? 'default',
+        loadMs: transcriberLoadMs,
+        warmupMs: transcriberWarmupMs,
+      })
     } catch (error) {
       scope.postMessage({ state: 'preload-error', error: error instanceof Error ? error.message : String(error) })
     }
     return
   }
+
   try {
     if (!audio?.length) throw new Error('No speech was recorded.')
     if (!transcriber) scope.postMessage({ state: 'loading' })
     const activeTranscriber = await getTranscriber()
     scope.postMessage({ state: 'transcribing' })
+    const resampleStarted = performance.now()
     const waveform = resampleForWhisper(audio, sampleRate || 16000)
+    const resampleMs = performance.now() - resampleStarted
+    const inferStarted = performance.now()
     const result = await (activeTranscriber as unknown as (input: Float32Array) => Promise<{ text?: string }>)(waveform)
-    scope.postMessage({ text: result.text?.trim() ?? '', requestId })
+    const inferMs = performance.now() - inferStarted
+    scope.postMessage({ text: result.text?.trim() ?? '', requestId, timings: { resampleMs, inferMs } })
   } catch (error) {
     scope.postMessage({ error: error instanceof Error ? error.message : String(error), requestId })
   }
