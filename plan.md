@@ -230,7 +230,7 @@ Keep navigation small. Use plain words: **Today, Inbox, Later, Done**. Quick det
 - On a laptop-width screen, show **Today** on the left and **This week** on the right.
 
 ### Inbox
-- Default destination for tasks without a date.
+- Default destination for tasks without a date and for dated tasks that still need review. A dated task stays in Inbox until the user completes its audit; its saved date and time are preserved.
 - Quick-add field always visible (bottom on phone, top on laptop).
 - Newest tasks easy to find. Complete, edit, and remove inline.
 
@@ -243,7 +243,8 @@ Keep navigation small. Use plain words: **Today, Inbox, Later, Done**. Quick det
 
 ### Quick details (the audit)
 - Only for **basic** tasks (Section 1.3A). Never a full-list review.
-- One task per screen, with the same tap chips (When, Size, Important, Label) plus **Skip** and **Done**.
+- One task per screen. Review date, exact due time, size, importance, label, recurrence, reminder, and description, plus **Skip** and **Done**.
+- Audit tasks with fewer than five of those seven optional detail categories. Keep them in Inbox until the user finishes or skips the audit; preserve their date/time meanwhile.
 - Reached from the Today card or the details prompt notification. Never forced.
 
 ### Settings
@@ -430,10 +431,10 @@ Actions on the daily nudge: **Done**, **Later** (opens Tomorrow / This weekend /
 - A tap on any nudge, or a completed task, resets everything to normal.
 
 ### Details prompt (audit of basic tasks)
-- When a **basic** task is created, schedule one `details_prompt` reminder for one hour later.
-- Cancel it if the task gains a third optional field, is completed, or is removed in that hour.
+- When an unaudited task has fewer than five of seven optional detail categories (exact date, size, importance, label, recurrence, description, reminder), schedule one `details_prompt` reminder for one hour later.
+- Cancel it if the task reaches five categories, is completed, removed, or already reviewed.
 - Tapping opens **Quick details** for that task (or the batch).
-- A **complete** task (3 or more optional fields set) is never prompted.
+- A task with five or more categories is never prompted.
 - The prompt is silent and also appears as the Today card, so it never makes noise during a meeting.
 
 ### Permission flow

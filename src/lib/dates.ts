@@ -16,8 +16,9 @@ export function dateForChoice(choice: WhenChoice, now = new Date()) {
   return { due_at: date.toISOString(), due_is_approx: approximate }
 }
 
-export function classifyView(task: { due_at: string | null; status: string }, today = new Date()) {
+export function classifyView(task: { due_at: string | null; status: string; is_inbox?: boolean }, today = new Date()) {
   if (task.status === 'completed') return 'Done'
+  if (task.is_inbox) return 'Inbox'
   if (!task.due_at) return 'Inbox'
   const due = new Date(task.due_at)
   const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate())

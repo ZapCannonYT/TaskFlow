@@ -54,8 +54,10 @@ For Cloudflare Pages, set `VITE_VAPID_PUBLIC_KEY` as a build environment variabl
 
 In Taskflow, create at least one task, choose **Yes** on the optional daily-nudge invitation, then use **Settings → Send test notification**. A browser permission prompt appears only after choosing Yes or turning the daily nudge on in Settings. Explicit reminders are optional and appear after opening a task with a specific date.
 
-## Phase 5 and Phase 6 features
+## Recurrence, descriptions, and audit Inbox
 
-Recurring tasks can be set to daily, weekdays, weekly, or monthly from the add-task details, Quick details, or task editor. Completing an occurrence creates its next dated occurrence; Undo removes that next occurrence and reopens the completed task. Monthly repeats preserve the original day of the month when possible (for example, a task on the 31st moves to the last day of shorter months).
+Recurring tasks can be set to daily, weekdays, weekly, or monthly from the add-task details, Quick details, or task editor. Completing an occurrence creates the next future occurrence, even when the prior task was completed late; Undo removes that next occurrence and reopens the completed task. Monthly repeats preserve the original day of the month when possible (for example, a task on the 31st moves to the last day of shorter months). Descriptions are available when adding or editing a task.
+
+The task audit checks seven detail categories: an exact date, size, importance, label, recurrence, description, and reminder. Tasks with fewer than five selected categories stay in Inbox until the user reviews or skips the audit; due dates and times remain saved while the task is in Inbox. The audit card offers the full set of date/time, size, importance, label, recurrence, reminder, and description controls. Apply migration `20261024010000_phase6_descriptions_inbox_audit.sql` before deploying this frontend or Edge Function.
 
 Task titles can include explicit dates and times such as `Call Sam tomorrow at 3pm`, `Review notes next Monday`, `Pay rent on Oct 24`, or `Submit report at 15:30`. Taskflow puts the date/time in the deadline fields and saves only the remaining title. Installed PWAs can also receive shared text or a link through the system Share menu. Export and restore are available in **Settings**. Offline task writes remain disabled until a conflict policy is designed.
