@@ -1,0 +1,5 @@
+[functions.companion-dispatch]
+verify_jwt = false
+
+[functions.test-push]
+verify_jwt = true
