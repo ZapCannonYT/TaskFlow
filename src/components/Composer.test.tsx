@@ -9,7 +9,7 @@ const mockVoice = vi.hoisted(() => vi.fn())
 vi.mock('../features/voice/useVoiceCapture', () => ({ useVoiceCapture: (...args: unknown[]) => mockVoice(...args) }))
 
 const baseVoice = () => ({
-  state: 'idle', message: '', processing: false, hasTranscript: false,
+  state: 'idle', message: '', processing: false, hasTranscript: false, canRetry: false, retry: vi.fn(),
   start: vi.fn(), stop: vi.fn(), cancelTranscription: vi.fn(), reset: vi.fn(),
   meterRef: { current: null }, modelStatus: { state: 'idle', fallbacks: 0 },
 })

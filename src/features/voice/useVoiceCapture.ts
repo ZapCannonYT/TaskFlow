@@ -10,6 +10,17 @@ const RAW_MIC_CONSTRAINTS = { channelCount: 1, echoCancellation: false, noiseSup
 // Once the cloud endpoint is known to be missing (e.g. plain `vite` dev), use the on-device model for the rest of the page's life.
 let cloudUnavailable = false
 
+const MIN_AUDIO_SECONDS = 0.4
+
+export function micErrorMessage(cause: unknown) {
+  const name = cause instanceof DOMException ? cause.name : ''
+  if (name === 'NotAllowedError' || name === 'SecurityError') return 'Microphone access is blocked. Allow it from the lock icon in the address bar, then tap the mic again.'
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') return 'No microphone was found. Connect one, or type your task instead.'
+  if (name === 'NotReadableError') return 'The microphone is in use by another app. Close it and try again.'
+  const detail = cause instanceof Error ? cause.message : String(cause)
+  return `Microphone could not start (${detail.slice(0, 120)}). You can type your task instead.`
+}
+
 function joinChunks(chunks: Float32Array[]) {
   const output = new Float32Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0))
   let offset = 0
@@ -43,6 +54,10 @@ export function useVoiceCapture({ isOnline, onText }: { isOnline: boolean; onTex
   const recordedRef = useRef<Float32Array[]>([])
   const baseTitleRef = useRef('')
   const abortRef = useRef<AbortController | null>(null)
+  const errorRef = useRef('')
+  const noteRef = useRef('')
+  const lastAudioRef = useRef<{ audio: Float32Array; rate: number } | null>(null)
+  const [canRetry, setCanRetry] = useState(false)
 
   useEffect(() => subscribeVoiceStatus(status => {
     statusRef.current = status
@@ -71,7 +86,7 @@ export function useVoiceCapture({ isOnline, onText }: { isOnline: boolean; onTex
     if (!endedRef.current || jobsRef.current > 0) return
     setProcessing(false)
     setState('ready')
-    setMessage(hasTranscriptRef.current ? 'Transcript ready. Edit the title, then press Add.' : 'No speech was heard. Try again.')
+    setMessage(errorRef.current || (hasTranscriptRef.current ? `Transcript ready. Edit the title, then press Add.${noteRef.current}` : 'Nothing was heard. Tap the mic and speak a little louder or closer.'))
   }, [])
 
   const runAction = useCallback((action: Exclude<ReturnType<ReturnType<typeof createLiveSession>['nextAction']>, { type: 'none' }>) => {
@@ -106,30 +121,37 @@ export function useVoiceCapture({ isOnline, onText }: { isOnline: boolean; onTex
     })
   }, [clearAudio, finishIfDone, onText])
 
-  const transcribeWhole = useCallback(() => {
-    const audio = joinChunks(recordedRef.current)
-    recordedRef.current = []
-    if (!lastVoiceRef.current || !audio.length) return
-    const rate = rateRef.current
+  const sendAudio = useCallback((audio: Float32Array, rate: number) => {
     const controller = new AbortController()
     abortRef.current = controller
+    errorRef.current = ''
+    noteRef.current = ''
+    lastAudioRef.current = { audio, rate }
+    setCanRetry(false)
     jobsRef.current++
     setProcessing(true)
     setMessage('Transcribing…')
     const applyText = (text: string) => {
       const title = [baseTitleRef.current.trim(), text].filter(Boolean).join(' ').slice(0, 500)
-      if (text) { hasTranscriptRef.current = true; setHasTranscript(true); onText(title) }
+      if (text) { hasTranscriptRef.current = true; setHasTranscript(true); onText(title); lastAudioRef.current = null }
     }
     void transcribeInCloud(audio, rate, controller.signal).then(applyText).catch(async cause => {
       if (controller.signal.aborted) return
+      const cloudReason = cause instanceof Error ? cause.message : String(cause)
+      console.warn('[voice] cloud transcription failed:', cause)
       if (cause instanceof CloudUnavailableError) cloudUnavailable = true
-      setMessage('Cloud voice is unavailable, using the on-device model…')
+      // A sign-in problem will not be fixed by the on-device model; say so directly.
+      if (/sign in/i.test(cloudReason)) { errorRef.current = cloudReason; setCanRetry(true); return }
+      setMessage(statusRef.current.state === 'ready' ? 'Cloud voice failed, trying the on-device model…' : 'Cloud voice failed, loading the on-device model (first time only)…')
       try {
         const result = await transcribeSegment(audio, rate, 'final')
-        if (!controller.signal.aborted) applyText(result.text.trim())
+        if (!controller.signal.aborted) { noteRef.current = ' (Cloud voice was unavailable, so the less accurate on-device model was used.)'; applyText(result.text.trim()) }
       } catch (fallbackCause) {
-        const reason = fallbackCause instanceof Error ? fallbackCause.message : String(fallbackCause)
-        if (reason !== 'cancelled') setMessage(`Transcription failed · ${reason.slice(0, 180)}. No task was added.`)
+        const localReason = fallbackCause instanceof Error ? fallbackCause.message : String(fallbackCause)
+        if (localReason === 'cancelled') return
+        console.warn('[voice] on-device transcription failed:', fallbackCause)
+        errorRef.current = `Couldn't transcribe. Cloud: ${cloudReason.slice(0, 120)} On-device: ${localReason.slice(0, 120)}`
+        setCanRetry(true)
       }
     }).finally(() => {
       if (abortRef.current === controller) abortRef.current = null
@@ -137,6 +159,22 @@ export function useVoiceCapture({ isOnline, onText }: { isOnline: boolean; onTex
       if (jobsRef.current === 0 && !controller.signal.aborted) { setProcessing(false); finishIfDone() }
     })
   }, [finishIfDone, onText])
+
+  const transcribeWhole = useCallback(() => {
+    const audio = joinChunks(recordedRef.current)
+    recordedRef.current = []
+    // Whisper's own VAD skips silence, so send anything long enough rather than trusting the level meter.
+    if (audio.length < rateRef.current * MIN_AUDIO_SECONDS) return
+    sendAudio(audio, rateRef.current)
+  }, [sendAudio])
+
+  const retry = useCallback(() => {
+    const last = lastAudioRef.current
+    if (!last || jobsRef.current > 0) return
+    endedRef.current = true
+    setState('transcribing')
+    sendAudio(last.audio, last.rate)
+  }, [sendAudio])
 
   const stop = useCallback(() => {
     if (endedRef.current) return
@@ -155,7 +193,7 @@ export function useVoiceCapture({ isOnline, onText }: { isOnline: boolean; onTex
     cloudRef.current = !cloudUnavailable
     if (!cloudRef.current && statusRef.current.state !== 'ready') startVoicePreload()
     hasTranscriptRef.current = false; setHasTranscript(false); jobsRef.current = 0; endedRef.current = false
-    recordedRef.current = []; baseTitleRef.current = baseTitle
+    recordedRef.current = []; baseTitleRef.current = baseTitle; errorRef.current = ''; lastAudioRef.current = null; setCanRetry(false)
     sessionRef.current = createLiveSession(baseTitle)
     setMessage('Allow microphone access so Taski can turn speech into a task.')
     try {
@@ -212,8 +250,7 @@ export function useVoiceCapture({ isOnline, onText }: { isOnline: boolean; onTex
       }, 100)
     } catch (cause) {
       clearAudio(); setState('idle')
-      const detail = cause instanceof Error ? cause.message : String(cause)
-      setMessage(`Microphone could not start · ${detail.slice(0, 180)}. You can type your task instead.`)
+      setMessage(micErrorMessage(cause))
     }
   }, [clearAudio, isOnline, runAction, state, stop])
 
@@ -228,5 +265,5 @@ export function useVoiceCapture({ isOnline, onText }: { isOnline: boolean; onTex
     setState('idle'); setMessage(''); setProcessing(false); setHasTranscript(false)
   }, [clearAudio])
   useEffect(() => () => clearAudio(), [clearAudio])
-  return { state, message, processing, hasTranscript, start, stop, cancelTranscription, reset, meterRef, modelStatus }
+  return { state, message, processing, hasTranscript, canRetry, start, stop, retry, cancelTranscription, reset, meterRef, modelStatus }
 }

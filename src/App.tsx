@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArchiveRestore, CalendarDays, CalendarRange, Check, CircleCheck, Clock, Download, Inbox, RotateCcw, Star, Sun, X } from 'lucide-react'
+import { flushSync } from 'react-dom'
+import { ArchiveRestore, CalendarDays, CalendarRange, Check, CircleCheck, Clock, Download, Inbox, Plus, RotateCcw, Star, Sun, X } from 'lucide-react'
 import { isSupabaseConfigured, Label, PushSubscriptionRow, supabase, Task, UserPreferences } from './lib/supabase'
 import { addLocalDays, classifyView, dateForChoice, getSevenDays, isDueOnDay, isMissed, isSameLocalDay, localDateInput, localTimeInput, rankOneThing, startOfLocalDay, startOfLocalWeek, withLocalTime } from './lib/dates'
 import { isBasicTask, needsDetailsPrompt } from './lib/quickDetails'
@@ -8,10 +9,9 @@ import { Composer, type ComposerHandle, type DraftDetails } from './components/C
 import { TaskRow } from './components/TaskRow'
 import { ReminderPicker } from './components/ReminderPicker'
 import { DayGrid } from './components/DayGrid'
-import { DayTaskSheet } from './components/DayTaskSheet'
 import { useVisualViewport } from './lib/useVisualViewport'
 import { useNow } from './lib/useNow'
-import { getMotionPref, prefersReducedMotion, setMotionPref, type MotionPref } from './lib/motion'
+import { getMotionPref, motionScale, prefersReducedMotion, setMotionPref, type MotionPref } from './lib/motion'
 import { isTimed, splitDayTasks } from './features/today/dayLayout'
 
 type View = 'Today' | 'Inbox' | 'Later' | 'This week' | 'Done'
@@ -88,7 +88,8 @@ function App() {
   const [completingIds, setCompletingIds] = useState<ReadonlySet<string>>(() => new Set())
   const [settlingIds, setSettlingIds] = useState<readonly string[]>([])
   const [completedThisSession, setCompletedThisSession] = useState(0)
-  const [sheetTaskId, setSheetTaskId] = useState<string | null>(null)
+  // A task opened from the schedule is shown, expanded, at the top of Inbox.
+  const [pinnedEditId, setPinnedEditId] = useState<string | null>(null)
   const [clearDeletedBusy, setClearDeletedBusy] = useState(false)
   const inboxReleaseTimersRef = useRef(new Map<string, number>())
   const [busy, setBusy] = useState(false)
@@ -106,6 +107,9 @@ function App() {
   const [quickDetailsTaskId, setQuickDetailsTaskId] = useState<string | null>(null)
   const [quickDescription, setQuickDescription] = useState('')
   const composerRef = useRef<ComposerHandle>(null)
+  // Phones show the composer only after the floating Add button is tapped; desktop ignores this.
+  const [composerOpen, setComposerOpen] = useState(false)
+  const openComposer = useCallback(() => { flushSync(() => setComposerOpen(true)); composerRef.current?.focus() }, [])
   const pendingRef = useRef(new Map<string, PendingCompletion>())
   const settleTimerRef = useRef<number | undefined>(undefined)
   const commitTimerRef = useRef<number | undefined>(undefined)
@@ -291,15 +295,15 @@ function App() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { setExpanded(null); return }
+      if (event.key === 'Escape') { setExpanded(null); setComposerOpen(false); return }
       if (!(event.key.toLowerCase() === 'n' || event.key.toLowerCase() === 'c') || event.ctrlKey || event.metaKey || event.altKey) return
       const active = document.activeElement
       if (active instanceof HTMLElement && (active.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName))) return
-      event.preventDefault(); composerRef.current?.focus()
+      event.preventDefault(); openComposer()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [openComposer])
 
   const visibleTasks = useMemo(() => {
     const active = tasks.filter(task => !task.deleted_at)
@@ -330,9 +334,7 @@ function App() {
   const anytimeTasks = useMemo(() => allAnytime.filter(task => task.id !== oneThing?.id && !missedIds.has(task.id)), [allAnytime, oneThing?.id, missedIds])
   const viewingToday = isSameLocalDay(selectedDay, new Date())
   const now = useNow(view === 'Today' && viewingToday)
-  const closeSheet = useCallback(() => setSheetTaskId(null), [])
-  const openDaySheet = useCallback((task: Task) => setSheetTaskId(task.id), [])
-  const sheetTask = sheetTaskId ? tasks.find(task => task.id === sheetTaskId && !task.deleted_at && task.status === 'open') : undefined
+  const pinnedTask = pinnedEditId ? tasks.find(task => task.id === pinnedEditId && !task.deleted_at && task.status === 'open') : undefined
   const allClear = view === 'Today' && viewingToday && timedTodayTasks.length === 0 && anytimeTasks.length === 0 && !oneThing && missedTasks.length === 0 && completedThisSession > 0
   const basicTasks = useMemo(() => tasks.filter(task => classifyView(task) === 'Inbox' && needsDetailsPrompt(task)), [tasks])
   const selectedQuickTask = quickDetailsTaskId ? tasks.find(task => task.id === quickDetailsTaskId && task.status === 'open' && !task.deleted_at && task.is_inbox && !task.details_prompted_at) : undefined
@@ -340,10 +342,20 @@ function App() {
 
   function chooseView(nextView: View) {
     commitCompletions()
+    setPinnedEditId(null)
     if (nextView === 'Today') setSelectedDay(startOfLocalDay(new Date()))
     setViewState(nextView)
     setError('')
     setErrorRetryable(false)
+  }
+
+  function openFromSchedule(task: Task) {
+    commitCompletions()
+    setPinnedEditId(task.id)
+    setExpanded(task.id)
+    setViewState('Inbox')
+    setError('')
+    window.scrollTo({ top: 0 })
   }
 
   const selectDay = (day: Date) => { commitCompletions(); setSelectedDay(day) }
@@ -376,7 +388,7 @@ function App() {
     if (result.error) { setError(`Not saved · ${result.error.message}`); return false }
     setTasks(current => [result.data as Task, ...current]); setError('')
     setNewTaskId(result.data.id)
-    window.setTimeout(() => setNewTaskId(current => current === result.data.id ? null : current), 720)
+    window.setTimeout(() => setNewTaskId(current => current === result.data.id ? null : current), 720 * motionScale())
     const addedTask = result.data as Task
     const addDetails = needsDetailsPrompt(addedTask) && classifyView(addedTask) === 'Inbox'
     setToast({
@@ -574,13 +586,13 @@ function App() {
       const text = params.get('text')?.trim() ?? ''
       const url = params.get('url')?.trim() ?? ''
       const shared = [...new Set([title, text, url].filter(Boolean))].join(' ')
-      if (shared) { composerRef.current?.setTitle(shared); composerRef.current?.focus() }
+      if (shared) { composerRef.current?.setTitle(shared); openComposer() }
       params.delete('share'); params.delete('title'); params.delete('text'); params.delete('url')
       window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`)
     }
     const quickDetailsId = params.get('quick_details')
     if (quickDetailsId) { openTaskDetailsInInbox(quickDetailsId); params.delete('quick_details'); window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`) }
-    if (params.get('capture') === 'voice') { params.delete('capture'); window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`); window.setTimeout(() => composerRef.current?.startVoice(), 300) }
+    if (params.get('capture') === 'voice') { params.delete('capture'); window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`); setComposerOpen(true); window.setTimeout(() => composerRef.current?.startVoice(), 300) }
   }, [signedIn])
 
   async function updateTask(task: Task, values: Partial<Task>) {
@@ -644,7 +656,7 @@ function App() {
     }
     setTasks(current => current.filter(item => item.id !== nextTask?.id).map(item => item.id === task.id ? { ...item, status: 'open', completed_at: null } : item))
     setNewTaskId(task.id)
-    window.setTimeout(() => setNewTaskId(current => current === task.id ? null : current), 720)
+    window.setTimeout(() => setNewTaskId(current => current === task.id ? null : current), 720 * motionScale())
   }
 
   async function completeTask(task: Task) {
@@ -656,7 +668,7 @@ function App() {
     buzz()
     const abort = () => { pendingRef.current.delete(task.id); setCompleting(task.id, false) }
     const { data: completedRow, error: updateError } = await client.from('tasks').update({ status: 'completed', completed_at: completedAt, updated_at: completedAt }).eq('id', task.id).eq('status', 'open').is('deleted_at', null).select('id').maybeSingle()
-    if (updateError || !completedRow) { abort(); setNewTaskId(task.id); window.setTimeout(() => setNewTaskId(current => current === task.id ? null : current), 720); setError(updateError ? `Not saved · ${updateError.message}` : 'This task was already changed on another device. Refresh and try again.'); return }
+    if (updateError || !completedRow) { abort(); setNewTaskId(task.id); window.setTimeout(() => setNewTaskId(current => current === task.id ? null : current), 720 * motionScale()); setError(updateError ? `Not saved · ${updateError.message}` : 'This task was already changed on another device. Refresh and try again.'); return }
     let nextTask: Task | null = null
     if (task.recurrence_rule && task.due_at) {
       const next = await client.from('tasks').insert({
@@ -688,7 +700,7 @@ function App() {
     const ids = [...pendingRef.current].filter(([, entry]) => entry.saved).map(([id]) => id)
     if (!ids.length) return
     setSettlingIds(ids)
-    const collapse = SETTLE_START_MS + SETTLE_OUT_MS + SETTLE_STEP_MS * Math.min(ids.length - 1, SETTLE_STAGGER_CAP)
+    const collapse = (SETTLE_START_MS + SETTLE_OUT_MS) * motionScale() + SETTLE_STEP_MS * Math.min(ids.length - 1, SETTLE_STAGGER_CAP)
     commitTimerRef.current = window.setTimeout(commitCompletions, collapse)
   }
 
@@ -861,8 +873,10 @@ function App() {
             {notificationMessage && <p className="settings-copy" role="status">{notificationMessage}</p>}
           </section>}
           {showNotificationPrompt && <aside className="nudge-offer" aria-label="Daily nudge setup"><span>Want a daily nudge so nothing slips?</span><div><button className="primary-button" disabled={!isOnline || pushBusy} onClick={() => void enableNotifications()}>{pushBusy ? 'Setting up…' : 'Yes'}</button><button className="text-button" disabled={!isOnline} onClick={() => void deferNotificationPrompt()}>Not now</button></div></aside>}
-          <div className="page-heading"><h1>{view === 'Today' ? todayLabel : view}</h1></div>
-          <Composer ref={composerRef} labels={labels} isOnline={isOnline} busy={busy} onSubmit={addTask} onCreateLabel={createLabel} onRenameLabel={renameLabel} onDeleteLabel={deleteLabel}/>
+          {view === 'Today' ? <h1 className="sr-only">{todayLabel}</h1> : <div className="page-heading"><h1>{view}</h1></div>}
+          <button type="button" className="add-fab" aria-label="Add a task" onClick={openComposer}><Plus size={18}/>Add task</button>
+          {composerOpen && <button type="button" className="composer-scrim" aria-label="Close add task" tabIndex={-1} onClick={() => setComposerOpen(false)}/>}
+          <Composer ref={composerRef} open={composerOpen} labels={labels} isOnline={isOnline} busy={busy} onSubmit={async (title, draft) => { const saved = await addTask(title, draft); if (saved) setComposerOpen(false); return saved }} onCreateLabel={createLabel} onRenameLabel={renameLabel} onDeleteLabel={deleteLabel}/>
           {error && <div className="error-banner" role="alert">{error}{(errorRetryable || retryPushSetup !== null) && <button className="text-button" disabled={!isOnline || pushBusy} onClick={() => retryPushSetup === null ? void load() : void setupPush(retryPushSetup)}>Retry</button>}{!errorRetryable && retryPushSetup === null && <button className="text-button" onClick={() => setError('')}>Dismiss</button>}</div>}
           <div key={view} className="view-enter">
           {view === 'Today' && <section className="day-strip" aria-label="Choose a day">{todayDays.map(day => {
@@ -876,10 +890,10 @@ function App() {
             <section className="day-pane">
               {oneThing && !isTimed(oneThing) && <article key={oneThing.id} className={`one-thing-card ${completingIds.has(oneThing.id) ? 'task-completing' : ''} ${settleIndexById.has(oneThing.id) ? 'task-settling' : ''}`}><p className="eyebrow">One thing to start with</p><h3><span className="task-title-text">{oneThing.title}</span></h3><p className="one-thing-reason">{oneThing.is_important ? 'Important' : oneThing.size ? (oneThing.size === 'quick' ? 'Quick task' : oneThing.size === 'hour' ? 'About an hour' : 'A bigger task') : `Due ${isSameLocalDay(selectedDay, new Date()) ? 'today' : selectedDay.toLocaleDateString(undefined, { weekday: 'long' })}`}</p><div className="one-thing-actions"><button className="secondary-button accent-outline-button" disabled={!isOnline || completingIds.has(oneThing.id)} onClick={() => void completeTask(oneThing)}>Done</button><button className="secondary-button" disabled={!isOnline} onClick={() => void moveOneThingToTomorrow(oneThing)}>Tomorrow</button></div></article>}
               {timedTodayTasks.length > 0 && <section className="schedule">
-                <h3 className="lane-heading">{viewingToday ? "Today's schedule" : `${todayLabel}'s schedule`}</h3>
+                <h3 className="lane-heading">Schedule</h3>
                 <DayGrid timed={timedTodayTasks} now={viewingToday ? now : null} nextTaskId={oneThing?.id}
                   completingIds={completingIds} settleIndexById={settleIndexById} isOnline={isOnline}
-                  onComplete={onRowComplete} onOpen={openDaySheet}/>
+                  onComplete={onRowComplete} onOpen={openFromSchedule}/>
               </section>}
               {(anytimeTasks.length > 0 || timedTodayTasks.length === 0) && <section className="anytime">
                 {timedTodayTasks.length > 0 && <h3 className="lane-heading">Anytime</h3>}
@@ -892,6 +906,7 @@ function App() {
           </div>}
           {view === 'This week' && <section className="week-view"><div className="pane-heading"><div><p className="eyebrow">Monday–Sunday</p><h2>This week</h2></div></div>{renderWeekAgenda(visibleTasks)}</section>}
           {view === 'Inbox' && basicTasks.length > 0 && <aside className="quick-details-prompt details-inbox-prompt"><span>{basicTasks.length} {basicTasks.length === 1 ? 'task could' : 'tasks could'} use more details.</span><button className="secondary-button" onClick={() => openTaskDetailsInInbox(basicTasks[0].id)}>Add details</button></aside>}
+          {view === 'Inbox' && pinnedTask && !visibleTasks.some(task => task.id === pinnedTask.id) && <section className="pinned-edit" aria-label="Task from your schedule"><div className="pinned-edit-head"><h3>From your schedule</h3><button className="text-button" onClick={() => chooseView('Today')}>Back to Today</button></div>{renderTaskRows([pinnedTask], 'From your schedule')}</section>}
           {(view === 'Inbox' || view === 'Later' || view === 'Done') && renderTaskRows(visibleTasks, view)}
           {view === 'Done' && <section className="removed-section"><div className="removed-heading"><h2><ArchiveRestore size={17}/>Recently removed</h2>{deletedTasks.length > 0 && <button className="secondary-button" disabled={!isOnline || clearDeletedBusy} onClick={() => void clearDeletedTasks()}>{clearDeletedBusy ? 'Clearing…' : 'Clear all'}</button>}</div>{deletedTasks.length ? deletedTasks.map(task => <div className="removed-row" key={task.id}><span>{task.title}</span><button className="secondary-button" disabled={!isOnline} onClick={() => void restoreTask(task)}><RotateCcw size={14}/>Restore</button></div>) : tasksLoaded ? <p className="removed-empty">Removed tasks can be restored here.</p> : <><span className="sr-only" role="status">Loading tasks</span><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/></>}</section>}
           </div>
@@ -899,13 +914,6 @@ function App() {
       </main>
     </div>
     {toast && <div className={`toast ${toast.compact ? 'toast-compact' : ''} ${toastClosing ? 'toast-closing' : ''}`} role="status"><span>{toast.text}</span>{toast.action && <button onClick={() => { toast.action?.run(); setToast(null) }}>{toast.action.label}</button>}{toast.undo && <button disabled={!isOnline} onClick={() => { void toast.undo?.(); setToast(null) }}>Undo</button>}</div>}
-    {sheetTask && <DayTaskSheet onClose={closeSheet}>
-      <TaskRow task={sheetTask} labels={labels} listName="Today" isOnline={isOnline} expanded isNew={false}
-        isCompleting={false} isSettling={false} settleIndex={0}
-        onToggleExpand={() => closeSheet()}
-        onComplete={task => { closeSheet(); onRowComplete(task) }}
-        onUpdate={onRowUpdate} onRemove={task => { closeSheet(); onRowRemove(task) }}/>
-    </DayTaskSheet>}
     <nav className="mobile-tabs" aria-label="Task views">{tabs.map(tab => <button key={tab} className={view === tab ? 'active' : ''} aria-current={view === tab ? 'page' : undefined} onClick={() => chooseView(tab)}>{tab === 'Today' ? <Sun size={16}/> : tab === 'Inbox' ? <Inbox size={16}/> : tab === 'Later' ? <Clock size={16}/> : tab === 'This week' ? <CalendarRange size={16}/> : <CircleCheck size={16}/>} {tab}</button>)}</nav>
   </div>
 }

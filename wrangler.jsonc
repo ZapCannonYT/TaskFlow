@@ -16,5 +16,12 @@
     "SUPABASE_URL": "https://jpfbuoizwhlzxhpjouub.supabase.co",
     "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_mdup2EGzRYcN899AdRNyjg_POPx3SJv"
   },
-  "previews": {}
+  // Previews do not inherit `ai` or `vars`, so repeat them here or voice falls back to on-device.
+  "previews": {
+    "ai": { "binding": "AI" },
+    "vars": {
+      "SUPABASE_URL": "https://jpfbuoizwhlzxhpjouub.supabase.co",
+      "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_mdup2EGzRYcN899AdRNyjg_POPx3SJv"
+    }
+  }
 }

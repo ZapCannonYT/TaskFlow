@@ -25,3 +25,9 @@ export function prefersReducedMotion() {
   if (pref === 'system') return window.matchMedia('(prefers-reduced-motion: reduce)').matches
   return pref === 'reduced'
 }
+
+/** Multiplier for feedback animation durations, from the `--m` CSS variable (2 on laptops). */
+export function motionScale() {
+  const value = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--m'))
+  return Number.isFinite(value) && value > 0 ? value : 1
+}

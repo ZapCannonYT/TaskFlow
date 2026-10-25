@@ -29,16 +29,22 @@ export async function transcribeInCloud(audio: Float32Array, sampleRate: number,
   const token = data.session?.access_token
   if (!token) throw new Error('Sign in again to use voice capture.')
   const clipped = resampleForWhisper(audio, sampleRate).subarray(0, 16000 * CLOUD_MAX_SECONDS)
-  const response = await fetch('/api/transcribe', {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'audio/wav' },
-    body: encodeWav(clipped),
-    signal,
-  })
+  let response: Response
+  try {
+    response = await fetch('/api/transcribe', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'audio/wav' },
+      body: encodeWav(clipped),
+      signal,
+    })
+  } catch (cause) {
+    if (signal?.aborted) throw cause
+    throw new Error('Could not reach the voice service.')
+  }
   // Plain `vite` dev has no worker, so the SPA fallback answers with HTML.
   if (!response.headers.get('content-type')?.includes('application/json')) throw new CloudUnavailableError()
   const body = await response.json().catch(() => ({})) as { text?: string; error?: string }
   if (response.status === 404 || response.status === 503) throw new CloudUnavailableError()
-  if (!response.ok) throw new Error(body.error ?? `Cloud transcription failed (${response.status}).`)
+  if (!response.ok) throw new Error(`${body.error ?? 'Voice service error.'} (${response.status})`)
   return (body.text ?? '').trim()
 }

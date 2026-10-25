@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { CalendarDays, Clock3, Mic, MicOff, Plus, Repeat, Star, Trash2, X } from 'lucide-react'
+import { CalendarDays, Mic, MicOff, Plus, Repeat, Star, Trash2, X } from 'lucide-react'
 import type { Label, Task } from '../lib/supabase'
 import { dateForChoice, type WhenChoice } from '../lib/dates'
 import { parseNaturalTask } from '../lib/naturalTime'
@@ -11,6 +11,7 @@ import { ReminderPicker } from './ReminderPicker'
 export type DraftDetails = { due_at: string | null; due_is_approx: boolean; is_all_day: boolean; size: Task['size']; is_important: boolean; label_id: string | null; recurrence_rule: Task['recurrence_rule']; description: string; reminder_offset: Task['reminder_offset']; reminder_minutes: number | null; is_inbox: boolean }
 export type ComposerHandle = { focus(): void; startVoice(): void; setTitle(value: string): void }
 export type ComposerProps = {
+  open?: boolean
   labels: Label[]
   isOnline: boolean
   busy: boolean
@@ -47,7 +48,7 @@ function whenValue(draft: DraftDetails): string {
   return preset ? preset[0] : 'date'
 }
 
-export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer({ labels, isOnline, busy, onSubmit, onCreateLabel, onRenameLabel, onDeleteLabel }, ref) {
+export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer({ open = false, labels, isOnline, busy, onSubmit, onCreateLabel, onRenameLabel, onDeleteLabel }, ref) {
   const inputRef = useRef<HTMLInputElement>(null)
   const dateRef = useRef<HTMLInputElement>(null)
   const [title, setTitle] = useState('')
@@ -59,7 +60,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const onVoiceText = (text: string) => setTitle(text.slice(0, 500))
   const voice = useVoiceCapture({ isOnline, onText: onVoiceText })
   useEffect(() => {
-    if (voice.state !== 'ready' || !voice.hasTranscript || !voice.message.startsWith('Transcript ready')) { setHideTranscriptNotice(false); return }
+    if (voice.state !== 'ready' || !voice.hasTranscript || !voice.message.startsWith('Transcript ready') || voice.message.includes('on-device')) { setHideTranscriptNotice(false); return }
     setHideTranscriptNotice(false)
     const timer = window.setTimeout(() => setHideTranscriptNotice(true), 4500)
     return () => window.clearTimeout(timer)
@@ -104,14 +105,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       due_is_approx: rule ? false : current.due_is_approx,
     }))
   }
-  return <form className="composer" onSubmit={submit}>
+  return <form className={`composer ${open ? 'open' : ''}`} onSubmit={submit}>
     <div className="composer-field"><Plus className="composer-plus" size={19} aria-hidden="true"/><input ref={inputRef} aria-label="Add a task" aria-readonly={voice.state === 'listening'} readOnly={voice.state === 'listening'} placeholder="Add a task…" value={title} maxLength={500} enterKeyHint="done" autoComplete="off" autoCapitalize="sentences" onFocus={event => {
       if (window.innerWidth >= 640) return
       const input = event.currentTarget
       window.setTimeout(() => input.scrollIntoView({ block: 'nearest', behavior: 'auto' }), 100)
       window.setTimeout(() => input.scrollIntoView({ block: 'nearest', behavior: 'auto' }), 300)
     }} onChange={event => setTitle(event.target.value)} disabled={!isOnline}/><button type="button" className={`icon-button voice-button ${voice.state === 'listening' ? 'listening' : ''}`} aria-label={voice.state === 'listening' ? 'Stop listening' : 'Add by voice'} disabled={!isOnline || voice.processing && voice.state !== 'listening'} onClick={() => voice.state === 'listening' ? voice.stop() : void voice.start(title)}>{voice.state === 'listening' ? <MicOff size={18}/> : <Mic size={18}/>}</button><button className="primary-button add-button" type="submit" disabled={!title.trim() || busy || !isOnline || voice.state === 'listening' || voice.state === 'transcribing' || voice.processing}>{!isOnline ? 'Offline' : busy ? 'Saving…' : voice.state === 'ready' && voice.hasTranscript ? 'Add task' : 'Add'}</button></div>
-    {(voice.state === 'listening' || voice.state === 'transcribing' || voice.processing || voiceMessage || voice.modelStatus.state === 'downloading' || voice.modelStatus.state === 'error') && <div className="voice-panel"><div className="voice-status-row">{voice.state === 'listening' && <VoiceMeter meterRef={voice.meterRef}/>}<p className="voice-status" role="status">{voiceMessage || (voice.modelStatus.state === 'downloading' ? 'Downloading voice model… this may take a moment.' : voice.modelStatus.state === 'error' && voice.state === 'idle' ? 'Voice could not load. Tap the mic to retry, or type instead.' : '')}</p>{voice.processing && <button type="button" className="text-button" onClick={voice.cancelTranscription}>Stop transcription</button>}</div></div>}
+    {(voice.state === 'listening' || voice.state === 'transcribing' || voice.processing || voiceMessage || voice.modelStatus.state === 'downloading' || voice.modelStatus.state === 'error') && <div className="voice-panel"><div className="voice-status-row">{voice.state === 'listening' && <VoiceMeter meterRef={voice.meterRef}/>}<p className="voice-status" role="status">{voiceMessage || (voice.modelStatus.state === 'downloading' ? 'Downloading voice model… this may take a moment.' : voice.modelStatus.state === 'error' && voice.state === 'idle' ? 'Voice could not load. Tap the mic to retry, or type instead.' : '')}</p>{voice.processing && <button type="button" className="text-button" onClick={voice.cancelTranscription}>Stop transcription</button>}{!voice.processing && voice.canRetry && <button type="button" className="text-button" disabled={!isOnline} onClick={voice.retry}>Try again</button>}</div></div>}
     {title.trim().length > 0 && <div className="composer-options">
       <div className="chip-row" role="group" aria-label="When, size and time">
         <label className={`select-chip when-chip ${draft.due_at ? 'active' : ''}`}><CalendarDays size={13} aria-hidden="true"/>
@@ -123,7 +124,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           <input ref={dateRef} className="when-date-input" aria-label="Pick a date" tabIndex={-1} type="date" disabled={!isOnline} value={dateInput(draft.due_at)} onChange={event => setDraft(current => ({ ...current, due_at: event.target.value ? withTime(new Date(`${event.target.value}T12:00:00`).toISOString(), timeInput(current.due_at) || '12:00') : null, due_is_approx: false, recurrence_rule: event.target.value ? current.recurrence_rule : null }))}/>
         </label>
         <label className={`select-chip ${draft.size ? 'active' : ''}`}><span className="sr-only">Size</span><select aria-label="Size" value={draft.size ?? ''} disabled={!isOnline} onChange={event => setDraft(current => ({ ...current, size: (event.target.value || null) as Task['size'] }))}><option value="">Size</option><option value="quick">Quick</option><option value="hour">An hour</option><option value="big">Big</option></select></label>
-        <label className={`select-chip due-time-chip ${hasTime ? 'active' : ''}`}><Clock3 size={13} aria-hidden="true"/><span className="sr-only">Time</span><input aria-label="Due time" type="time" disabled={!isOnline} value={hasTime ? timeInput(draft.due_at) : ''} onChange={event => setDraft(current => ({ ...current, due_at: event.target.value ? withTime(current.due_at, event.target.value) : current.due_at, due_is_approx: event.target.value ? false : current.due_is_approx, is_all_day: !event.target.value }))}/></label>
+        <label className={`select-chip due-time-chip ${hasTime ? 'active' : ''}`}><span className="sr-only">Time</span><input aria-label="Due time" type="time" disabled={!isOnline} value={hasTime ? timeInput(draft.due_at) : ''} onChange={event => setDraft(current => ({ ...current, due_at: event.target.value ? withTime(current.due_at, event.target.value) : current.due_at, due_is_approx: event.target.value ? false : current.due_is_approx, is_all_day: !event.target.value }))}/></label>
       </div>
       {showSecondRow && <div className="chip-row detail-row composer-row-two">
         <ReminderPicker offset={draft.reminder_offset} minutes={draft.reminder_minutes} disabled={!isOnline || !draft.due_at || draft.due_is_approx} onChange={values => setDraft(current => ({ ...current, reminder_offset: values.reminder_offset, reminder_minutes: values.reminder_minutes ?? null }))}/>
