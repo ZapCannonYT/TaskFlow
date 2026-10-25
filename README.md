@@ -1,11 +1,11 @@
 # Taskflow
 
-Taskflow is a responsive, installable React app backed by Supabase Auth and Postgres. It includes task capture, Inbox/Today/Later/This week/Done views, per-user labels, soft delete/restore, live updates between open clients, explicit due-date reminders, and an optional daily companion nudge. Task ranking is deterministic and uses documented rules; it does not use AI. Voice capture transcribes in the cloud through Cloudflare Workers AI and falls back to an on-device model.
+Taskflow is a responsive, installable React app backed by Supabase Auth and Postgres. It includes task capture, Inbox/Today/This week/Done views, per-user labels, soft delete/restore, live updates between open clients, explicit due-date reminders, and an optional daily companion nudge. Task ranking is deterministic and uses documented rules; it does not use AI. Voice capture transcribes in the cloud through Cloudflare Workers AI and falls back to an on-device model.
 
 ## Run locally
 
 1. Create a Supabase project.
-2. In its SQL editor, run the Phase 1 migration if you have not already. For Phase 3, follow the ordered setup below: deploy the functions and set secrets, run the schema migration, add Vault values, then install the separate scheduler migration. This prevents cron from calling an unconfigured endpoint. Also apply `20261022020000_phase4_voice_phase5_quick_details.sql`, `20261024000000_phase5_recurrence.sql`, `20261024010000_phase6_descriptions_inbox_audit.sql`, and `20261025000000_phase7_inbox_and_reminders.sql` in order. Also apply `20261026000000_phase7_custom_reminder.sql` with `supabase db push` (see Custom reminders below).
+2. In its SQL editor, run the Phase 1 migration if you have not already. For Phase 3, follow the ordered setup below: deploy the functions and set secrets, run the schema migration, add Vault values, then install the separate scheduler migration. This prevents cron from calling an unconfigured endpoint. Also apply `20261022020000_phase4_voice_phase5_quick_details.sql`, `20261024000000_phase5_recurrence.sql`, `20261024010000_phase6_descriptions_inbox_audit.sql`, and `20261025000000_phase7_inbox_and_reminders.sql` in order. Also apply `20261026000000_phase7_custom_reminder.sql` with `supabase db push` (see Custom reminders below). Finally apply `20261027000000_phase8_recurrence_dedupe.sql` and then `20261028000000_phase9_inbox_digest.sql` (see Inbox digest below).
 3. Copy `.env.example` to `.env` and set `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, and (after Phase 3 push setup) `VITE_VAPID_PUBLIC_KEY`. The VAPID public key is safe in the browser; never put a secret, VAPID private key, dispatch token, or service-role key in a `VITE_` variable.
 4. Install and start:
 
@@ -60,11 +60,21 @@ In Taskflow, create at least one task, choose **Yes** on the optional daily-nudg
 
 ## Recurrence, descriptions, and audit Inbox
 
-Recurring tasks can be set to daily, weekdays, weekly, or monthly from the add-task details, Quick details, or task editor. Completing an occurrence creates the next future occurrence, even when the prior task was completed late; Undo removes that next occurrence and reopens the completed task. Monthly repeats preserve the original day of the month when possible (for example, a task on the 31st moves to the last day of shorter months). Descriptions are available when adding or editing a task.
+Recurring tasks can be set to daily, weekdays, weekly, or monthly from the add-task details, Quick details, or task editor. Completing an occurrence creates the next future occurrence, even when the prior task was completed late; Undo removes that next occurrence and reopens the completed task. The next occurrence is scheduled on its own day and does not go to Inbox. Each repeat may have only one open occurrence at a time (migration `20261027000000_phase8_recurrence_dedupe.sql`). Monthly repeats preserve the original day of the month when possible (for example, a task on the 31st moves to the last day of shorter months). Descriptions are available when adding or editing a task.
 
 The task audit checks seven detail categories: an exact date, size, importance, label, recurrence, description, and reminder. Tasks with three or fewer selected categories stay in Inbox. Once a task has at least four categories and has not changed for 1.2 seconds, it leaves Inbox and moves to the view matching its due date. Due dates and times remain saved while the task is in Inbox. The audit card offers the full set of date/time, size, importance, label, recurrence, reminder, and description controls. Apply migration `20261024010000_phase6_descriptions_inbox_audit.sql` and then `20261025000000_phase7_inbox_and_reminders.sql` before deploying this frontend or Edge Function.
 
 Task titles can include explicit dates and times such as `Call Sam tomorrow at 3pm`, `Review notes next Monday`, `Pay rent on Oct 24`, or `Submit report at 15:30`. Taskflow puts the date/time in the deadline fields and saves only the remaining title. Installed PWAs can also receive shared text or a link through the system Share menu. Export and restore are available in **Settings**. Offline task writes remain disabled until a conflict policy is designed.
+
+## Inbox digest
+
+Each new Inbox capture schedules one Inbox digest an hour later. A later capture pushes that digest back to an hour after the newest capture. There is at most one digest per user per day (dedupe key `inbox-digest:<user>:<local day>`). When it is due, `companion-dispatch` builds the text at send time: "N tasks in Inbox" with the first two titles. If Inbox is clear, the digest is skipped. The notification is silent, and tapping it opens the app at `/?open=inbox`.
+
+Apply `supabase/migrations/20261028000000_phase9_inbox_digest.sql`. It also cancels the old queued per-task "add details" prompts. Then redeploy the function:
+
+```sh
+supabase functions deploy companion-dispatch
+```
 
 ## Voice capture
 

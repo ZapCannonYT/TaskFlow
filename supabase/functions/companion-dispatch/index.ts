@@ -82,7 +82,24 @@ async function sendToUser(admin: ReturnType<typeof createClient>, prefs: Prefere
   if (reminderError) throw reminderError
   if (!currentReminder || currentReminder.status !== 'processing') return 'cancelled'
   const timezone = safeTimeZone(prefs.timezone)
-  if (reminder.kind === 'details_prompt') {
+  const isDigest = reminder.kind === 'details_prompt' && reminder.payload.digest === true
+  if (isDigest) {
+    // One Inbox digest per day: describe what is waiting at send time, or skip if Inbox is clear.
+    const { data: waiting, error: inboxError } = await admin.from('tasks').select('title')
+      .eq('user_id', prefs.user_id).eq('status', 'open').eq('is_inbox', true).is('deleted_at', null).is('details_prompted_at', null)
+      .order('created_at', { ascending: false }).limit(20)
+    if (inboxError) throw inboxError
+    if (!waiting?.length) {
+      await admin.from('task_reminders').update({ status: 'cancelled', locked_at: null }).eq('id', reminder.id)
+      return 'cancelled'
+    }
+    const titles = waiting.slice(0, 2).map((task: { title: string }) => task.title).join(', ')
+    reminder.payload = {
+      ...reminder.payload,
+      title: waiting.length === 1 ? '1 task in Inbox' : `${waiting.length} tasks in Inbox`,
+      body: `${titles}${waiting.length > 2 ? ` and ${waiting.length - 2} more` : ''}. Give them a day or details.`,
+    }
+  } else if (reminder.kind === 'details_prompt') {
     const localDay = localParts(new Date(), timezone).day
     const nextDay = new Date(`${localDay}T00:00:00Z`)
     nextDay.setUTCDate(nextDay.getUTCDate() + 1)
@@ -154,7 +171,7 @@ async function sendToUser(admin: ReturnType<typeof createClient>, prefs: Prefere
         title: String(reminder.payload.title ?? (['advance', 'due'].includes(reminder.kind) ? 'Task reminder' : 'Taskflow')),
         body: String(reminder.payload.body ?? task?.title ?? 'You have a task to look at.'),
         icon: '/icon-192.png', badge: '/icon-192.png',
-        data: { reminder_id: reminder.id, task_id: taskId, url: reminder.kind === 'details_prompt' && taskId ? `/?quick_details=${encodeURIComponent(taskId)}` : '/' },
+        data: { reminder_id: reminder.id, task_id: taskId, url: isDigest ? '/?open=inbox' : reminder.kind === 'details_prompt' && taskId ? `/?quick_details=${encodeURIComponent(taskId)}` : '/' },
         actions,
         silent: reminder.kind === 'daily_repeat' || reminder.kind === 'details_prompt',
       }))

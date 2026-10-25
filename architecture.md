@@ -24,7 +24,7 @@ Three rules decide almost every design choice below:
 │  Android phone (PWA)                      Windows laptop (PWA)      │
 │                                                                      │
 │  ┌──────────────────────────── React app ────────────────────────┐  │
-│  │  UI screens:  Today · Inbox · Later · Done · Quick details    │  │
+│  │  UI screens:  Today · Inbox · This week · Done · Quick details│  │
 │  │  Capture:     [ Add a task…            mic ]                  │  │
 │  │                         │                │                    │  │
 │  │                    typed text      audio from mic             │  │
@@ -182,7 +182,7 @@ Two kinds of notification exist: **reminders you set** on a task (due-time alert
 |---|---|---|---|
 | Daily nudge | Once a day, default 6:30 PM (you can change it) | Normal | 1 per day; skipped if nothing to surface |
 | Urgent re-ping | About 3 hours later, never after 10:15 PM | Silent | 1 per day; only if the task is due today/missed and the nudge was not tapped |
-| Details prompt | 1 hour after a basic task is added | Silent | Batched; max 2 per day |
+| Inbox digest | One hour after the newest Inbox capture | Silent | At most 1 per day; skipped if Inbox is clear |
 | Your own reminders | Whatever you set | Normal | As configured |
 | Weekly summary | Sunday evening | Normal | Replaces that day's daily nudge |
 
@@ -221,12 +221,13 @@ Buttons on the nudge: **Done**, **Later**, **Skip today**.
 ### 6.6 Ignored nudges
 The companion **never turns itself off**. Ignoring today changes nothing about tomorrow. The one re-ping is the only repeat, and it only exists for urgent tasks.
 
-### 6.7 The details prompt (audit of basic tasks)
+### 6.7 The Inbox digest (audit of basic tasks)
 - Every task has four optional fields: When, Size, Important, Label.
 - **Basic** = 0 to 2 of them set. **Complete** = 3 or more.
-- On creating a basic task, a `details_prompt` reminder is scheduled one hour out. It is cancelled if the task becomes complete, is completed, or is removed.
-- It arrives silently (and as a card on Today), is batched if several tasks qualify, and opens **Quick details**: one task at a time with tap chips and a Skip button.
-- Complete tasks are never prompted, so people who fill in details are never nagged.
+- Each new Inbox capture schedules one `details_prompt` reminder, flagged as the digest, one hour out. A later capture pushes that same reminder back to an hour after the newest capture. The dedupe key `inbox-digest:<user>:<local day>` allows at most one digest per user per day. Migration `supabase/migrations/20261028000000_phase9_inbox_digest.sql` also cancels the old per-task prompts.
+- The Edge Function `companion-dispatch` builds the text at send time: "N tasks in Inbox" with the first two titles. It skips the digest if Inbox is clear.
+- The digest is silent. Tapping it opens the app at `/?open=inbox`, where each task can be opened in **Quick details**: one task at a time with tap chips and a Skip button.
+- Tasks that are complete, or have left Inbox, are never counted, so people who fill in details are never nagged.
 
 ### 6.8 Permission, the polite way
 Browsers make a denied permission hard to undo, so Taskflow asks twice: first its own one-line card after your first saved task ("Want a daily nudge so nothing slips?" Yes / Not now). Only **Yes** shows the real browser prompt. "Not now" re-offers once after about 3 days.
@@ -275,19 +276,20 @@ Steps: scaffold with Vite, install shadcn/ui, build the Inbox from a minimal-lis
 Rule of thumb: if a friend would need to ask what a word means, replace it.
 
 ### 7.4 Screens
-- **Today / Inbox / Later / Done**: four plain tabs, same row design in each.
+- **Today / Inbox / This week / Done**: four plain tabs, same row design in each.
 - **Add field + chips (composer)**: top on laptop, bottom on phone, mic inside the field (Phase 4). The first row shows only **When**, **Size**, and **Time**. Once any of them is set, a second row appears with **Reminder**, **Label**, **Repeat**, **Important**, and an **Add note** button for the description. Tapping is optional; Enter always saves.
 - **Today**:
-  - phone: one column. A big **"one thing"** card on top (the ranking function's pick, with Done / Later), a 7-day strip, then the day's list. A **This week** option groups the week by day.
+  - phone: one column. A big **"one thing"** card on top (the ranking function's pick, with Done / Later), a 7-day strip, then the day's list.
   - laptop: two panes, **Today** on the left and **This week** on the right.
+- **This week**: a rolling seven days starting today, matching the day strip. Tasks are grouped by day, and the view ends with a **Later** group for everything due after those seven days.
 - **Day schedule**: the time axis stretches where a task needs more room than its duration gives it, so titles are not clipped. Side-by-side columns are capped at 2 on narrow screens and 3 on wide ones, and crowded tasks show only the first few words of the title. Layout logic is `layoutDay` in `src/features/today/dayLayout.ts`.
 - **Why this layout?** Todoist's phone apps use a strip of days you swipe through and don't offer columns in Upcoming; Singularity's phone default is a one-week row of day tabs. Columns are cramped on a phone, so the phone gets one column plus a day strip, and the laptop has room for two panes.
 - **Task row**: checkbox, title, small chips only for fields that are set. Tap a row to reveal inline details. No modals.
-- **Quick details** (the audit, only for basic tasks): one task per screen, chips for When / Size / Important / Label / Repeat, plus **Skip** and **Done**. Repeat is optional, defaults to Never, and offers daily / weekdays / weekly / monthly. Completing a repeating task closes this occurrence and creates its next dated occurrence; it is never required to save or review a task. Reached from the Today card or the details prompt.
+- **Quick details** (the audit, only for basic tasks): one task per screen, chips for When / Size / Important / Label / Repeat, plus **Skip** and **Done**. Repeat is optional, defaults to Never, and offers daily / weekdays / weekly / monthly. Completing a repeating task closes this occurrence and creates its next dated occurrence; it is never required to save or review a task. Reached from the Today card or from an Inbox task.
 
 ### 7.5 A quick usability test you can run yourself
 1. Hand your phone to a friend with the app open; say "add: buy milk." Time it. Target: a few seconds, no hesitation.
-2. Add a title-only task and wait an hour. Does the silent "Add details?" prompt make sense, and can they finish Quick details in a few taps?
+2. Add a title-only task and wait an hour. Does the silent Inbox digest make sense when tapped, and can they finish Quick details in a few taps?
 3. Wherever they hesitate, rename or remove something. Repeat.
 
 ### 7.6 Motion setting
@@ -364,7 +366,7 @@ taskflow/
 - One daily nudge (default 6:30 PM, editable) plus one silent re-ping only for urgent tasks; it never turns itself off.
 - Ranking is a readable formula over due date, Important, and Size. No vectors, no AI.
 - Four optional tap fields (When, Size, Important, Label). 0 to 2 set means basic; 3 or more means complete.
-- Basic tasks get one silent details prompt an hour after creation; complete tasks never do.
+- Each new Inbox capture schedules one silent Inbox digest an hour later, at most one per user per day; it is skipped when Inbox is clear.
 - Phone: one column with a day strip. Laptop: Today and This week side by side.
 - Phase order: base, installable app and views, reminders and companion, voice, quick details, extras.
 

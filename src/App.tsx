@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { ArchiveRestore, CalendarDays, CalendarRange, Check, CircleCheck, Clock, Download, Inbox, Plus, RotateCcw, Star, Sun, X } from 'lucide-react'
+import { ArchiveRestore, CalendarDays, CalendarRange, Check, CircleCheck, Download, Inbox, Plus, RotateCcw, Star, Sun, X } from 'lucide-react'
 import { isSupabaseConfigured, Label, PushSubscriptionRow, supabase, Task, UserPreferences } from './lib/supabase'
 import { addLocalDays, classifyView, dateForChoice, getSevenDays, isDueOnDay, isMissed, isSameLocalDay, localDateInput, localTimeInput, rankOneThing, startOfLocalDay, startOfLocalWeek, withLocalTime } from './lib/dates'
 import { isBasicTask, needsDetailsPrompt } from './lib/quickDetails'
@@ -15,8 +15,8 @@ import { useNow } from './lib/useNow'
 import { getMotionPref, motionScale, prefersReducedMotion, setMotionPref, type MotionPref } from './lib/motion'
 import { isTimed, splitDayTasks } from './features/today/dayLayout'
 
-type View = 'Today' | 'Inbox' | 'Later' | 'This week' | 'Done'
-const tabs: View[] = ['Today', 'Inbox', 'Later', 'This week', 'Done']
+type View = 'Today' | 'Inbox' | 'This week' | 'Done'
+const tabs: View[] = ['Today', 'Inbox', 'This week', 'Done']
 
 type BeforeInstallPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }> }
 
@@ -316,18 +316,17 @@ function App() {
     if (view === 'Done') return active.filter(task => task.status === 'completed')
     if (view === 'Today') return active.filter(task => task.status === 'open' && !task.is_inbox && isDueOnDay(task, selectedDay))
     if (view === 'Inbox') return active.filter(task => task.status === 'open' && classifyView(task) === 'Inbox')
-    if (view === 'Later') {
-      const laterThanWeek = addLocalDays(startOfLocalWeek(new Date()), 7)
-      return active.filter(task => task.status === 'open' && !task.is_inbox && Boolean(task.due_at) && new Date(task.due_at!) >= laterThanWeek)
-    }
-    const weekStart = startOfLocalWeek(new Date())
+    const weekStart = startOfLocalDay(new Date())
     const weekEnd = addLocalDays(weekStart, 7)
     return active.filter(task => task.status === 'open' && !task.is_inbox && task.due_at && new Date(task.due_at) >= weekStart && new Date(task.due_at) < weekEnd)
   }, [tasks, view, selectedDay])
   const deletedTasks = useMemo(() => tasks.filter(task => task.deleted_at), [tasks])
   const todayDays = useMemo(() => getSevenDays(), [dayKey])
-  const weekStart = useMemo(() => startOfLocalWeek(new Date()), [dayKey])
+  // "This week" is a rolling seven days from today, matching the day strip, so it is never nearly empty on a Sunday.
+  const weekStart = useMemo(() => startOfLocalDay(new Date()), [dayKey])
   const weekEnd = useMemo(() => addLocalDays(weekStart, 7), [weekStart])
+  // Tasks beyond this week used to live in a separate Later tab; they now close out the week view.
+  const afterWeekTasks = useMemo(() => tasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && task.due_at && new Date(task.due_at) >= weekEnd).sort((a, b) => Date.parse(a.due_at!) - Date.parse(b.due_at!)), [tasks, weekEnd])
   const weekTasks = useMemo(() => tasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && task.due_at && new Date(task.due_at) >= weekStart && new Date(task.due_at) < weekEnd), [tasks, weekStart, weekEnd])
   const selectedDayTasks = view === 'Today' ? visibleTasks : []
   const oneThing = view === 'Today' ? rankOneThing(selectedDayTasks)[0] : undefined
@@ -600,6 +599,7 @@ function App() {
       params.delete('share'); params.delete('title'); params.delete('text'); params.delete('url')
       window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`)
     }
+    if (params.get('open') === 'inbox') { chooseView('Inbox'); params.delete('open'); window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`) }
     const quickDetailsId = params.get('quick_details')
     if (quickDetailsId) { openTaskDetailsInInbox(quickDetailsId); params.delete('quick_details'); window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`) }
     if (params.get('capture') === 'voice') { params.delete('capture'); window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`); setComposerOpen(true); window.setTimeout(() => composerRef.current?.startVoice(), 300) }
@@ -827,7 +827,7 @@ function App() {
   }
 
   const taskCounts = useMemo(() => {
-    const counts: Record<View, number> = { Today: 0, Inbox: 0, Later: 0, 'This week': 0, Done: 0 }
+    const counts: Record<View, number> = { Today: 0, Inbox: 0, 'This week': 0, Done: 0 }
     const perDay = new Map<string, number>()
     const today = startOfLocalDay(new Date())
     for (const task of tasks) {
@@ -840,7 +840,6 @@ function App() {
         perDay.set(key, (perDay.get(key) ?? 0) + 1)
         if (due >= weekStart && due < weekEnd) counts['This week']++
         if (isSameLocalDay(due, today) || isMissed(task)) counts.Today++
-        else if (task.due_at && new Date(task.due_at) >= weekEnd) counts.Later++
       }
     }
     return { counts, perDay }
@@ -875,7 +874,7 @@ function App() {
     <header className="topbar"><a className="brand" href="#" aria-label="Taskflow home"><span className="brand-mark"><Check size={16} /></span><span>Taskflow</span></a><div className="topbar-right">{installPrompt && <button className="text-button install-button" onClick={() => void installApp()}><Download size={15}/>Install app</button>}<span className="sync-state">{isOnline && syncStatus === 'Synced' && <span className="online-dot" />}{isOnline ? syncStatus : 'Offline'}</span><button className="text-button" aria-expanded={settingsOpen} onClick={() => { setSettingsOpen(open => !open); if (!settingsOpen) void loadNotificationSettings() }}>Settings</button><button className="text-button signout" onClick={() => supabase?.auth.signOut()}>Sign out</button></div></header>
     {!isOnline && <div className="offline-banner" role="status">Offline · showing your last saved tasks. Reconnect to make changes.</div>}
     <div className="workspace">
-      <aside className="sidebar"><p className="nav-label">Your lists</p><nav aria-label="Task views">{tabs.map(tab => <button key={tab} className={`nav-item ${view === tab ? 'selected' : ''}`} aria-current={view === tab ? 'page' : undefined} onClick={() => chooseView(tab)}>{tab === 'Today' ? <Sun size={16}/> : tab === 'Inbox' ? <Inbox size={16}/> : tab === 'Later' ? <Clock size={16}/> : tab === 'This week' ? <CalendarRange size={16}/> : <CircleCheck size={16}/>} {tab}<span className="nav-count">{viewCount(tab)}</span></button>)}</nav></aside>
+      <aside className="sidebar"><p className="nav-label">Your lists</p><nav aria-label="Task views">{tabs.map(tab => <button key={tab} className={`nav-item ${view === tab ? 'selected' : ''}`} aria-current={view === tab ? 'page' : undefined} onClick={() => chooseView(tab)}>{tab === 'Today' ? <Sun size={16}/> : tab === 'Inbox' ? <Inbox size={16}/> : tab === 'This week' ? <CalendarRange size={16}/> : <CircleCheck size={16}/>} {tab}<span className="nav-count">{viewCount(tab)}</span></button>)}</nav></aside>
       <main className="main-content">
         <div className={`content-inner ${view === 'Today' ? 'today-content' : ''}`}>
           {settingsOpen && <section className="settings-panel" aria-label="Notification settings"><div className="settings-heading"><div><p className="eyebrow">A quieter way to stay on top</p><h2>Notifications</h2></div><button className="icon-button" aria-label="Close settings" onClick={() => setSettingsOpen(false)}><X size={17}/></button></div>
@@ -920,17 +919,17 @@ function App() {
             </section>
             <aside className="week-pane"><div className="pane-heading"><div><p className="eyebrow">Coming up</p><h2>This week</h2></div><button className="text-button pane-link" onClick={() => chooseView('This week')}>Open week</button></div>{renderWeekAgenda(laterThisWeekTasks, selectedDay)}</aside>
           </div>}
-          {view === 'This week' && <section className="week-view">{renderWeekAgenda(visibleTasks)}</section>}
+          {view === 'This week' && <section className="week-view">{renderWeekAgenda(visibleTasks)}{afterWeekTasks.length > 0 && <section className="week-day-group after-week"><h3>Later</h3>{renderTaskRows(afterWeekTasks, 'Later')}</section>}</section>}
           {view === 'Inbox' && basicTasks.length > 0 && <aside className="quick-details-prompt details-inbox-prompt"><span>{basicTasks.length} {basicTasks.length === 1 ? 'task could' : 'tasks could'} use more details.</span><button className="secondary-button" onClick={() => openTaskDetailsInInbox(basicTasks[0].id)}>Add details</button></aside>}
           {view === 'Inbox' && pinnedTask && !visibleTasks.some(task => task.id === pinnedTask.id) && <section className="pinned-edit" aria-label="Task from your schedule"><div className="pinned-edit-head"><h3>From your schedule</h3><button className="text-button" onClick={() => chooseView('Today')}>Back to Today</button></div>{renderTaskRows([pinnedTask], 'From your schedule')}</section>}
-          {(view === 'Inbox' || view === 'Later' || view === 'Done') && renderTaskRows(visibleTasks, view)}
+          {(view === 'Inbox' || view === 'Done') && renderTaskRows(visibleTasks, view)}
           {view === 'Done' && <section className="removed-section"><div className="removed-heading"><h2><ArchiveRestore size={17}/>Recently removed</h2>{deletedTasks.length > 0 && <button className="secondary-button" disabled={!isOnline || clearDeletedBusy} onClick={() => void clearDeletedTasks()}>{clearDeletedBusy ? 'Clearing…' : 'Clear all'}</button>}</div>{deletedTasks.length ? deletedTasks.map(task => <div className="removed-row" key={task.id}><span>{task.title}</span><button className="secondary-button" disabled={!isOnline} onClick={() => void restoreTask(task)}><RotateCcw size={14}/>Restore</button></div>) : tasksLoaded ? <p className="removed-empty">Removed tasks can be restored here.</p> : <><span className="sr-only" role="status">Loading tasks</span><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/></>}</section>}
           </div>
         </div>
       </main>
     </div>
     {toast && <div className={`toast ${toast.compact ? 'toast-compact' : ''} ${toastClosing ? 'toast-closing' : ''}`} role="status"><span>{toast.text}</span>{toast.action && <button onClick={() => { toast.action?.run(); setToast(null) }}>{toast.action.label}</button>}{toast.undo && <button disabled={!isOnline} onClick={() => { void toast.undo?.(); setToast(null) }}>Undo</button>}</div>}
-    <nav className="mobile-tabs" aria-label="Task views">{tabs.map(tab => <button key={tab} className={view === tab ? 'active' : ''} aria-current={view === tab ? 'page' : undefined} onClick={() => chooseView(tab)}>{tab === 'Today' ? <Sun size={16}/> : tab === 'Inbox' ? <Inbox size={16}/> : tab === 'Later' ? <Clock size={16}/> : tab === 'This week' ? <CalendarRange size={16}/> : <CircleCheck size={16}/>} {tab}</button>)}</nav>
+    <nav className="mobile-tabs" aria-label="Task views">{tabs.map(tab => <button key={tab} className={view === tab ? 'active' : ''} aria-current={view === tab ? 'page' : undefined} onClick={() => chooseView(tab)}>{tab === 'Today' ? <Sun size={16}/> : tab === 'Inbox' ? <Inbox size={16}/> : tab === 'This week' ? <CalendarRange size={16}/> : <CircleCheck size={16}/>} {tab}</button>)}</nav>
   </div>
 }
 
