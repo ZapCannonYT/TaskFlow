@@ -13,6 +13,14 @@ const tabs: View[] = ['Today', 'Inbox', 'Later', 'This week', 'Done']
 
 type BeforeInstallPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }> }
 
+const SETTLE_IDLE_MS = 1100
+const SETTLE_OUT_MS = 360
+const SETTLE_STEP_MS = 45
+const SETTLE_STAGGER_CAP = 5
+const prefersReducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
+const buzz = () => { if (!prefersReducedMotion()) navigator.vibrate?.(10) }
+type PendingCompletion = { completedAt: string; nextTask: Task | null; saved: boolean }
+
 function vapidBytes(value: string) {
   const padding = '='.repeat((4 - value.length % 4) % 4)
   const base64 = (value + padding).replace(/-/g, '+').replace(/_/g, '/')
@@ -91,7 +99,9 @@ function App() {
   const [toast, setToast] = useState<{ text: string; undo?: () => Promise<void>; action?: { label: string; run: () => void } } | null>(null)
   const [toastClosing, setToastClosing] = useState(false)
   const [newTaskId, setNewTaskId] = useState<string | null>(null)
-  const [completingTaskId, setCompletingTaskId] = useState<string | null>(null)
+  const [completingIds, setCompletingIds] = useState<ReadonlySet<string>>(() => new Set())
+  const [settlingIds, setSettlingIds] = useState<readonly string[]>([])
+  const [completedThisSession, setCompletedThisSession] = useState(0)
   const [busy, setBusy] = useState(false)
   const [syncStatus, setSyncStatus] = useState(navigator.onLine ? 'Connecting' : 'Offline')
   const [isOnline, setIsOnline] = useState(navigator.onLine)
@@ -106,7 +116,11 @@ function App() {
   const [quickDetailsTaskId, setQuickDetailsTaskId] = useState<string | null>(null)
   const [quickDescription, setQuickDescription] = useState('')
   const composerRef = useRef<ComposerHandle>(null)
-  const completionTimersRef = useRef(new Map<string, number>())
+  const pendingRef = useRef(new Map<string, PendingCompletion>())
+  const settleTimerRef = useRef<number | undefined>(undefined)
+  const commitTimerRef = useRef<number | undefined>(undefined)
+  const settleIndexById = useMemo(() => new Map(settlingIds.map((id, index) => [id, Math.min(index, SETTLE_STAGGER_CAP)] as const)), [settlingIds])
+  const setCompleting = (id: string, on: boolean) => setCompletingIds(current => { const next = new Set(current); if (on) next.add(id); else next.delete(id); return next })
   const [notificationMessage, setNotificationMessage] = useState('')
   const [retryPushSetup, setRetryPushSetup] = useState<boolean | null>(null)
 
@@ -295,15 +309,25 @@ function App() {
   const missedTasks = useMemo(() => view === 'Today' && isSameLocalDay(selectedDay, new Date())
     ? tasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && isMissed(task))
     : [], [tasks, view, selectedDay])
+  const allClear = view === 'Today' && isSameLocalDay(selectedDay, new Date()) && selectedDayTasks.length === 0 && !oneThing && missedTasks.length === 0 && completedThisSession > 0
   const basicTasks = useMemo(() => tasks.filter(task => classifyView(task) === 'Inbox' && needsDetailsPrompt(task)), [tasks])
   const selectedQuickTask = quickDetailsTaskId ? tasks.find(task => task.id === quickDetailsTaskId && needsDetailsPrompt(task)) : undefined
   useEffect(() => { setQuickDescription(selectedQuickTask?.description ?? '') }, [selectedQuickTask?.id])
 
   function chooseView(nextView: View) {
+    commitCompletions()
     if (nextView === 'Today') setSelectedDay(startOfLocalDay(new Date()))
     setViewState(nextView)
     setError('')
   }
+
+  const selectDay = (day: Date) => { commitCompletions(); setSelectedDay(day) }
+
+  useEffect(() => {
+    const flush = () => { if (document.hidden) commitCompletions() }
+    document.addEventListener('visibilitychange', flush)
+    return () => { document.removeEventListener('visibilitychange', flush); window.clearTimeout(settleTimerRef.current); window.clearTimeout(commitTimerRef.current) }
+  }, [])
 
   function openTaskDetailsInInbox(taskId: string) {
     setQuickDetailsTaskId(null)
@@ -323,7 +347,7 @@ function App() {
     if (result.error) { setError(`Not saved · ${result.error.message}`); return false }
     setTasks(current => [result.data as Task, ...current]); setError('')
     setNewTaskId(result.data.id)
-    window.setTimeout(() => setNewTaskId(current => current === result.data.id ? null : current), 160)
+    window.setTimeout(() => setNewTaskId(current => current === result.data.id ? null : current), 720)
     const addedTask = result.data as Task
     const addDetails = needsDetailsPrompt(addedTask) && classifyView(addedTask) === 'Inbox'
     setToast({
@@ -551,8 +575,9 @@ function App() {
 
   async function reopenTask(task: Task, knownNext?: Task | null) {
     if (!supabase || !isOnline) return
-    const timer = completionTimersRef.current.get(task.id)
-    if (timer !== undefined) { window.clearTimeout(timer); completionTimersRef.current.delete(task.id) }
+    pendingRef.current.delete(task.id)
+    setCompleting(task.id, false)
+    setSettlingIds(current => current.filter(id => id !== task.id))
     const client = supabase
     const nextTask = knownNext ?? tasks.find(item => item.recurrence_parent_id === task.id && item.status === 'open' && !item.deleted_at) ?? null
     const restoredAt = new Date().toISOString()
@@ -566,15 +591,20 @@ function App() {
       setError(`Not saved · ${undone.error.message}`); return
     }
     setTasks(current => current.filter(item => item.id !== nextTask?.id).map(item => item.id === task.id ? { ...item, status: 'open', completed_at: null } : item))
+    setNewTaskId(task.id)
+    window.setTimeout(() => setNewTaskId(current => current === task.id ? null : current), 720)
   }
 
   async function completeTask(task: Task) {
-    if (!supabase || !isOnline || completingTaskId) return
+    if (!supabase || !isOnline || pendingRef.current.has(task.id)) return
     const client = supabase
     const completedAt = new Date().toISOString()
-    setCompletingTaskId(task.id)
+    pendingRef.current.set(task.id, { completedAt, nextTask: null, saved: false })
+    setCompleting(task.id, true)
+    buzz()
+    const abort = () => { pendingRef.current.delete(task.id); setCompleting(task.id, false) }
     const { data: completedRow, error: updateError } = await client.from('tasks').update({ status: 'completed', completed_at: completedAt, updated_at: completedAt }).eq('id', task.id).eq('status', 'open').is('deleted_at', null).select('id').maybeSingle()
-    if (updateError || !completedRow) { setCompletingTaskId(null); setNewTaskId(task.id); window.setTimeout(() => setNewTaskId(current => current === task.id ? null : current), 160); setError(updateError ? `Not saved · ${updateError.message}` : 'This task was already changed on another device. Refresh and try again.'); return }
+    if (updateError || !completedRow) { abort(); setNewTaskId(task.id); window.setTimeout(() => setNewTaskId(current => current === task.id ? null : current), 720); setError(updateError ? `Not saved · ${updateError.message}` : 'This task was already changed on another device. Refresh and try again.'); return }
     let nextTask: Task | null = null
     if (task.recurrence_rule && task.due_at) {
       const next = await client.from('tasks').insert({
@@ -586,18 +616,44 @@ function App() {
       }).select('*, labels(name)').single()
       if (next.error) {
         await client.from('tasks').update({ status: 'open', completed_at: null, updated_at: new Date().toISOString() }).eq('id', task.id)
-        setCompletingTaskId(null); setError(`Repeat could not be scheduled · ${next.error.message}`); return
+        abort(); setError(`Repeat could not be scheduled · ${next.error.message}`); return
       }
       nextTask = next.data as Task
     }
+    pendingRef.current.set(task.id, { completedAt, nextTask, saved: true })
     setToast({ text: `Done “${task.title}”`, undo: async () => { await reopenTask(task, nextTask) } })
-    const completeAnimMs = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 220
-    const timer = window.setTimeout(() => {
-      setTasks(current => [ ...(nextTask ? [nextTask] : []), ...current.map(item => item.id === task.id ? { ...item, status: 'completed' as const, completed_at: completedAt } : item) ])
-      setCompletingTaskId(null)
-      completionTimersRef.current.delete(task.id)
-    }, completeAnimMs)
-    completionTimersRef.current.set(task.id, timer)
+    scheduleSettle()
+  }
+
+  function scheduleSettle() {
+    window.clearTimeout(settleTimerRef.current)
+    window.clearTimeout(commitTimerRef.current)
+    if (prefersReducedMotion()) { commitCompletions(); return }
+    settleTimerRef.current = window.setTimeout(startSettle, SETTLE_IDLE_MS)
+  }
+
+  function startSettle() {
+    const ids = [...pendingRef.current].filter(([, entry]) => entry.saved).map(([id]) => id)
+    if (!ids.length) return
+    setSettlingIds(ids)
+    const collapse = SETTLE_OUT_MS + SETTLE_STEP_MS * Math.min(ids.length - 1, SETTLE_STAGGER_CAP) + 40
+    commitTimerRef.current = window.setTimeout(commitCompletions, collapse)
+  }
+
+  function commitCompletions() {
+    window.clearTimeout(settleTimerRef.current)
+    window.clearTimeout(commitTimerRef.current)
+    const saved = [...pendingRef.current].filter(([, entry]) => entry.saved)
+    if (!saved.length) { setSettlingIds([]); return }
+    const done = new Map(saved)
+    for (const [id] of saved) pendingRef.current.delete(id)
+    setTasks(current => [
+      ...saved.flatMap(([, entry]) => entry.nextTask ? [entry.nextTask] : []),
+      ...current.map(item => { const hit = done.get(item.id); return hit ? { ...item, status: 'completed' as const, completed_at: hit.completedAt } : item }),
+    ])
+    setCompletingIds(current => { const next = new Set(current); for (const [id] of saved) next.delete(id); return next })
+    setSettlingIds([])
+    setCompletedThisSession(count => count + saved.length)
   }
 
   async function removeTask(task: Task) {
@@ -650,6 +706,8 @@ function App() {
   const onToggleTaskExpand = useCallback((id: string) => setExpanded(current => current === id ? null : id), [])
   const onRowUpdate = useCallback((task: Task, values: Partial<Task>) => { void rowActionsRef.current.updateTask(task, values) }, [])
   const onRowComplete = useCallback((task: Task) => {
+    const entry = pendingRef.current.get(task.id)
+    if (entry) { if (entry.saved) void rowActionsRef.current.reopenTask(task); return }
     if (task.status === 'open') void rowActionsRef.current.completeTask(task)
     else void rowActionsRef.current.reopenTask(task)
   }, [])
@@ -658,7 +716,7 @@ function App() {
   function renderTaskRows(items: Task[], listName: string, emptyMessage = "Nothing here yet.") {
     return <section className="task-list" aria-label={listName + " tasks"}>
       {!items.length && (tasksLoaded ? <p className="empty-state">{emptyMessage}</p> : <><span className="sr-only" role="status">Loading tasks</span><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/></>)}
-      {items.map(task => <TaskRow key={task.id} task={task} labels={labels} listName={listName} isOnline={isOnline} expanded={expanded === task.id} isNew={newTaskId === task.id} isCompleting={completingTaskId === task.id} isSettling={false} settleIndex={0} onToggleExpand={onToggleTaskExpand} onComplete={onRowComplete} onUpdate={onRowUpdate} onRemove={onRowRemove}/>)}
+      {items.map(task => <TaskRow key={task.id} task={task} labels={labels} listName={listName} isOnline={isOnline} expanded={expanded === task.id} isNew={newTaskId === task.id} isCompleting={completingIds.has(task.id)} isSettling={settleIndexById.has(task.id)} settleIndex={settleIndexById.get(task.id) ?? 0} onToggleExpand={onToggleTaskExpand} onComplete={onRowComplete} onUpdate={onRowUpdate} onRemove={onRowRemove}/>)}
     </section>
   }
 
@@ -744,15 +802,15 @@ function App() {
           <div key={view} className="view-enter">
           {view === 'Today' && <section className="day-strip" aria-label="Choose a day">{todayDays.map(day => {
             const count = taskCounts.perDay.get(localDayKey(day)) ?? 0
-            return <button type="button" key={day.toISOString()} className={`day-strip-item ${isSameLocalDay(day, selectedDay) ? 'selected' : ''}`} aria-pressed={isSameLocalDay(day, selectedDay)} onClick={() => setSelectedDay(day)}><span>{isSameLocalDay(day, new Date()) ? 'Today' : day.toLocaleDateString(undefined, { weekday: 'short' })}</span><strong>{day.getDate()}</strong><span className="day-strip-count">{count || ' '}</span></button>
+            return <button type="button" key={day.toISOString()} className={`day-strip-item ${isSameLocalDay(day, selectedDay) ? 'selected' : ''}`} aria-pressed={isSameLocalDay(day, selectedDay)} onClick={() => selectDay(day)}><span>{isSameLocalDay(day, new Date()) ? 'Today' : day.toLocaleDateString(undefined, { weekday: 'short' })}</span><strong>{day.getDate()}</strong><span className="day-strip-count">{count || ' '}</span></button>
           })}</section>}
           {view === 'Today' && <div className="today-split">
             {basicTasks.length > 0 && <aside className="quick-details-prompt"><span>{basicTasks.length} {basicTasks.length === 1 ? 'Inbox task could' : 'Inbox tasks could'} use more details.</span><button className="secondary-button" onClick={() => openTaskDetailsInInbox(basicTasks[0].id)}>Open Inbox</button></aside>}
             {selectedQuickTask && <section className="quick-details-card" aria-label="Quick details"><p className="eyebrow">Quick details · {basicTasks.findIndex(task => task.id === selectedQuickTask.id) + 1} of {basicTasks.length}</p><h2>{selectedQuickTask.title}</h2><label className="description-field">Description<textarea aria-label="Description" maxLength={5000} disabled={!isOnline} value={quickDescription} placeholder="Add helpful context…" onChange={e => setQuickDescription(e.target.value)} onBlur={() => { const description = quickDescription.trim(); if (description !== (selectedQuickTask.description ?? "")) void updateTask(selectedQuickTask, { description }) }}/></label>{selectedQuickTask.due_at && selectedQuickTask.due_is_approx && <div className="chip-row"><span className="chip-group-label">Choose a day</span>{Array.from({ length: 7 }, (_, index) => addLocalDays(startOfLocalWeek(new Date(selectedQuickTask.due_at!)), index)).filter(day => day >= startOfLocalDay(new Date())).map(day => <button key={day.toISOString()} className="choice-chip" onClick={() => void updateTask(selectedQuickTask, { due_at: new Date(day.getFullYear(), day.getMonth(), day.getDate(), 12).toISOString(), due_is_approx: false })}>{day.toLocaleDateString(undefined, { weekday: 'short' })} {day.getDate()}</button>)}</div>}
               <div className="chip-row"><label className="choice-chip date-chip"><CalendarDays size={14}/><span>When</span><input aria-label="When" type="date" value={localDateInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { due_at: e.target.value ? new Date(`${e.target.value}T12:00:00`).toISOString() : null, due_is_approx: false, recurrence_rule: e.target.value ? selectedQuickTask.recurrence_rule : null })}/></label><label className="select-chip"><span>Due time</span><input aria-label="Due time" type="time" value={selectedQuickTask.is_all_day ? "" : localTimeInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { ...(e.target.value ? { due_at: withLocalTime(selectedQuickTask.due_at, e.target.value) } : {}), due_is_approx: false, is_all_day: !e.target.value })}/></label><label className="select-chip"><span>Repeat</span><select aria-label="Repeat" value={selectedQuickTask.recurrence_rule ?? ""} onChange={e => setQuickTaskRepeat(e.target.value)}><option value="">Never</option><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label><label className="select-chip"><span>Reminder</span><select aria-label="Reminder" disabled={!isOnline || !selectedQuickTask.due_at || selectedQuickTask.due_is_approx} value={selectedQuickTask.reminder_offset} onChange={e => void updateTask(selectedQuickTask, { reminder_offset: e.target.value as Task["reminder_offset"] })}><option value="none">None</option><option value="at_time">At due time</option><option value="1_day_before">1 day before</option><option value="2_days_before">2 days before</option></select></label><label className="select-chip"><span>Size</span><select aria-label="Size" value={selectedQuickTask.size ?? ''} onChange={e => void updateTask(selectedQuickTask, { size: (e.target.value || null) as Task['size'] })}><option value="">Not set</option><option value="quick">Quick</option><option value="hour">An hour</option><option value="big">Big</option></select></label><button className={`choice-chip ${selectedQuickTask.is_important ? 'starred' : ''}`} aria-pressed={selectedQuickTask.is_important} onClick={() => void updateTask(selectedQuickTask, { is_important: !selectedQuickTask.is_important })}><Star size={15}/>Important</button><label className="select-chip"><span>Label</span><select aria-label="Label" value={selectedQuickTask.label_id ?? ''} onChange={e => void updateTask(selectedQuickTask, { label_id: e.target.value || null })}><option value="">None</option>{labels.map(label => <option key={label.id} value={label.id}>{label.name}</option>)}</select></label></div><div className="quick-details-actions"><button className="text-button" onClick={() => void finishQuickDetails(true)}>Skip</button><button className="primary-button" onClick={() => void finishQuickDetails(false)}>Done</button></div></section>}
             <section className="day-pane"><div className="pane-heading"><div><p className="eyebrow">Selected day</p><h2>{isSameLocalDay(selectedDay, new Date()) ? 'Today' : todayLabel}</h2></div></div>
-              {oneThing && <article key={oneThing.id} className={`one-thing-card ${completingTaskId === oneThing.id ? 'task-completing' : ''}`}><p className="eyebrow">One thing to start with</p><h3>{oneThing.title}</h3><p className="one-thing-reason">{oneThing.is_important ? 'Important' : oneThing.size ? (oneThing.size === 'quick' ? 'Quick task' : oneThing.size === 'hour' ? 'About an hour' : 'A bigger task') : `Due ${isSameLocalDay(selectedDay, new Date()) ? 'today' : selectedDay.toLocaleDateString(undefined, { weekday: 'long' })}`}</p><div className="one-thing-actions"><button className="secondary-button accent-outline-button" disabled={!isOnline} onClick={() => void completeTask(oneThing)}>Done</button><button className="secondary-button" disabled={!isOnline} onClick={() => void moveOneThingToTomorrow(oneThing)}>Tomorrow</button></div></article>}
-              {renderTaskRows(remainingTodayTasks, `Other tasks for ${todayLabel}`, oneThing ? 'No other tasks for this day.' : 'Nothing is planned for this day.')}
+              {oneThing && <article key={oneThing.id} className={`one-thing-card ${completingIds.has(oneThing.id) ? 'task-completing' : ''} ${settleIndexById.has(oneThing.id) ? 'task-settling' : ''}`}><p className="eyebrow">One thing to start with</p><h3><span className="task-title-text">{oneThing.title}</span></h3><p className="one-thing-reason">{oneThing.is_important ? 'Important' : oneThing.size ? (oneThing.size === 'quick' ? 'Quick task' : oneThing.size === 'hour' ? 'About an hour' : 'A bigger task') : `Due ${isSameLocalDay(selectedDay, new Date()) ? 'today' : selectedDay.toLocaleDateString(undefined, { weekday: 'long' })}`}</p><div className="one-thing-actions"><button className="secondary-button accent-outline-button" disabled={!isOnline || completingIds.has(oneThing.id)} onClick={() => void completeTask(oneThing)}>Done</button><button className="secondary-button" disabled={!isOnline} onClick={() => void moveOneThingToTomorrow(oneThing)}>Tomorrow</button></div></article>}
+              {allClear ? <div className="all-clear" role="status"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M20 6 9 17l-5-5" transform="translate(-4 .5) scale(.85)"/></svg><p>All clear for today.</p></div> : renderTaskRows(remainingTodayTasks, `Other tasks for ${todayLabel}`, oneThing ? 'No other tasks for this day.' : 'Nothing is planned for this day.')}
               {missedTasks.length > 0 && <section className="missed-list"><h3>Missed</h3>{renderTaskRows(missedTasks, 'Missed tasks')}</section>}
             </section>
             <aside className="week-pane"><div className="pane-heading"><div><p className="eyebrow">Coming up</p><h2>This week</h2></div><button className="text-button pane-link" onClick={() => chooseView('This week')}>Open week</button></div>{renderWeekAgenda(laterThisWeekTasks, selectedDay)}</aside>
