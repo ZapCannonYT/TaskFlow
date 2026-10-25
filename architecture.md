@@ -1,6 +1,6 @@
 # Taskflow — Architecture
 
-This file explains **how Taskflow is built and why**. [`plan.md`](./plan.md) says *what* to build and in what order; this says how the parts fit together. Read this first if you want the mental model.
+This file explains how Taskflow is built and how its parts fit together. For setup and deployment, see `README.md`.
 
 ---
 
@@ -317,13 +317,12 @@ taskflow/
 │  └─ functions/
 │     ├─ reminder-dispatcher/   # budget rules, ranking, claims, push
 │     └─ task-action/
-├─ plan.md
 └─ architecture.md
 ```
 
 ---
 
-## 11. Build order (matches plan.md)
+## 11. Product implementation phases
 
 1. **Phase 1, Base:** tasks, login, RLS, one-field add with tap chips, Inbox / Today / Later / Done, sync. Size, Important, and Label columns exist from day one.
 2. **Phase 2, Installable app and views:** PWA, one-thing card, 7-day strip, This week, two-pane laptop layout.
