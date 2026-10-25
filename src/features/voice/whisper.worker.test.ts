@@ -118,6 +118,19 @@ describe('on-device speech worker', () => {
     expect(messages()).toContainEqual(expect.objectContaining({ text: 'Fallback worked' }))
   })
 
+  it('retries a transient model-download failure before changing models', async () => {
+    const transcriber = vi.fn(async () => ({ text: 'Retry worked' }))
+    pipelineMock.mockRejectedValueOnce(new Error('Failed to fetch')).mockResolvedValue(transcriber)
+    const onmessage = await startWorker()
+
+    await onmessage({ data: { audio: new Float32Array(16000), sampleRate: 16000 } })
+
+    expect(pipelineMock).toHaveBeenCalledTimes(2)
+    expect(pipelineMock).toHaveBeenNthCalledWith(2, 'automatic-speech-recognition', 'onnx-community/moonshine-tiny-ONNX', expect.any(Object))
+    expect(messages()).not.toContainEqual({ state: 'fallback' })
+    expect(messages()).toContainEqual(expect.objectContaining({ text: 'Retry worked' }))
+  })
+
   it('includes the selected model configuration in preloaded', async () => {
     pipelineMock.mockResolvedValue(vi.fn(async () => ({ text: '' })))
     const onmessage = await startWorker()

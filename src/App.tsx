@@ -6,6 +6,7 @@ import { isBasicTask, needsDetailsPrompt } from './lib/quickDetails'
 import { nextOccurrence } from './lib/recurrence'
 import { Composer, type ComposerHandle, type DraftDetails } from './components/Composer'
 import { TaskRow } from './components/TaskRow'
+import { useVisualViewport } from './lib/useVisualViewport'
 
 type View = 'Today' | 'Inbox' | 'Later' | 'This week' | 'Done'
 const tabs: View[] = ['Today', 'Inbox', 'Later', 'This week', 'Done']
@@ -76,6 +77,7 @@ function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
 }
 
 function App() {
+  useVisualViewport()
   const [sessionReady, setSessionReady] = useState(!isSupabaseConfigured)
   const [signedIn, setSignedIn] = useState(false)
   const [view, setViewState] = useState<View>('Today')
@@ -86,7 +88,7 @@ function App() {
   const [labels, setLabels] = useState<Label[]>([])
   const [expanded, setExpanded] = useState<string | null>(null)
   const [error, setError] = useState('')
-  const [toast, setToast] = useState<{ text: string; undo: () => Promise<void>; edit?: () => void } | null>(null)
+  const [toast, setToast] = useState<{ text: string; undo?: () => Promise<void>; action?: { label: string; run: () => void } } | null>(null)
   const [toastClosing, setToastClosing] = useState(false)
   const [newTaskId, setNewTaskId] = useState<string | null>(null)
   const [completingTaskId, setCompletingTaskId] = useState<string | null>(null)
@@ -293,13 +295,20 @@ function App() {
   const missedTasks = useMemo(() => view === 'Today' && isSameLocalDay(selectedDay, new Date())
     ? tasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && isMissed(task))
     : [], [tasks, view, selectedDay])
-  const basicTasks = useMemo(() => tasks.filter(needsDetailsPrompt), [tasks])
+  const basicTasks = useMemo(() => tasks.filter(task => classifyView(task) === 'Inbox' && needsDetailsPrompt(task)), [tasks])
   const selectedQuickTask = quickDetailsTaskId ? tasks.find(task => task.id === quickDetailsTaskId && needsDetailsPrompt(task)) : undefined
   useEffect(() => { setQuickDescription(selectedQuickTask?.description ?? '') }, [selectedQuickTask?.id])
 
   function chooseView(nextView: View) {
     if (nextView === 'Today') setSelectedDay(startOfLocalDay(new Date()))
     setViewState(nextView)
+    setError('')
+  }
+
+  function openTaskDetailsInInbox(taskId: string) {
+    setQuickDetailsTaskId(null)
+    setExpanded(taskId)
+    setViewState('Inbox')
     setError('')
   }
 
@@ -315,7 +324,13 @@ function App() {
     setTasks(current => [result.data as Task, ...current]); setError('')
     setNewTaskId(result.data.id)
     window.setTimeout(() => setNewTaskId(current => current === result.data.id ? null : current), 160)
-    setToast({ text: 'Task added', undo: async () => { const undone = await client.from('tasks').update({ deleted_at: new Date().toISOString() }).eq('id', result.data.id); if (!undone.error) setTasks(current => current.filter(t => t.id !== result.data.id)); else setError(`Not saved · ${undone.error.message}`) } })
+    const addedTask = result.data as Task
+    const addDetails = needsDetailsPrompt(addedTask) && classifyView(addedTask) === 'Inbox'
+    setToast({
+      text: addDetails ? 'Task added to Inbox' : 'Task added',
+      ...(addDetails ? { action: { label: 'Add details', run: () => openTaskDetailsInInbox(addedTask.id) } } : {}),
+      undo: async () => { const undone = await client.from('tasks').update({ deleted_at: new Date().toISOString() }).eq('id', result.data.id); if (!undone.error) setTasks(current => current.filter(t => t.id !== result.data.id)); else setError(`Not saved · ${undone.error.message}`) },
+    })
     return true
   }
 
@@ -467,18 +482,23 @@ function App() {
     const action = params.get('task_action')
     const taskId = params.get('task_id')
     const reminderId = params.get('reminder_id')
-    if (!action || !reminderId || !['open', 'done', 'later', 'skip'].includes(action)) return
+    if (!action || !reminderId || !['open', 'done', 'hour', 'later', 'skip'].includes(action)) return
     handledNotificationAction.current = true
     void (async () => {
       if (action === 'done' && taskId) {
         const result = await supabase!.from('tasks').select('*, labels(name)').eq('id', taskId).maybeSingle()
         if (result.error || !result.data) setError(`Task could not be completed · ${result.error?.message ?? 'Task not found.'}`)
         else await completeTask(result.data as Task)
-      } else if (action === 'later' && taskId) {
-        const due = dateForChoice('tomorrow')
-        const result = await supabase!.from('tasks').update({ ...due, updated_at: new Date().toISOString() }).eq('id', taskId).eq('status', 'open')
+      } else if ((action === 'hour' || action === 'later') && taskId) {
+        const due = action === 'hour'
+          ? { due_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(), due_is_approx: false, is_all_day: false }
+          : { ...dateForChoice('tomorrow'), is_all_day: true }
+        const result = await supabase!.from('tasks').update({ ...due, is_inbox: false, updated_at: new Date().toISOString() }).eq('id', taskId).eq('status', 'open')
         if (result.error) setError(`Task could not be moved · ${result.error.message}`)
-        else setTasks(current => current.map(task => task.id === taskId ? { ...task, ...due } : task))
+        else {
+          setTasks(current => current.map(task => task.id === taskId ? { ...task, ...due, is_inbox: false } : task))
+          setToast({ text: action === 'hour' ? 'Snoozed for 1 hour' : 'Moved to tomorrow' })
+        }
       } else if (action === 'skip') {
         const skipped = localDateInput(new Date().toISOString())
         await savePreferences({ skipped_until: skipped })
@@ -502,7 +522,7 @@ function App() {
       window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`)
     }
     const quickDetailsId = params.get('quick_details')
-    if (quickDetailsId) { setQuickDetailsTaskId(quickDetailsId); setViewState('Today'); params.delete('quick_details'); window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`) }
+    if (quickDetailsId) { openTaskDetailsInInbox(quickDetailsId); params.delete('quick_details'); window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`) }
     if (params.get('capture') === 'voice') { params.delete('capture'); window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`); window.setTimeout(() => composerRef.current?.startVoice(), 300) }
   }, [signedIn])
 
@@ -727,7 +747,7 @@ function App() {
             return <button type="button" key={day.toISOString()} className={`day-strip-item ${isSameLocalDay(day, selectedDay) ? 'selected' : ''}`} aria-pressed={isSameLocalDay(day, selectedDay)} onClick={() => setSelectedDay(day)}><span>{isSameLocalDay(day, new Date()) ? 'Today' : day.toLocaleDateString(undefined, { weekday: 'short' })}</span><strong>{day.getDate()}</strong><span className="day-strip-count">{count || ' '}</span></button>
           })}</section>}
           {view === 'Today' && <div className="today-split">
-            {basicTasks.length > 0 && <aside className="quick-details-prompt"><span>{basicTasks.length} {basicTasks.length === 1 ? 'task is' : 'tasks are'} just titles. Add details?</span><button className="secondary-button" onClick={() => setQuickDetailsTaskId(basicTasks[0].id)}>Quick details</button></aside>}
+            {basicTasks.length > 0 && <aside className="quick-details-prompt"><span>{basicTasks.length} {basicTasks.length === 1 ? 'Inbox task could' : 'Inbox tasks could'} use more details.</span><button className="secondary-button" onClick={() => openTaskDetailsInInbox(basicTasks[0].id)}>Open Inbox</button></aside>}
             {selectedQuickTask && <section className="quick-details-card" aria-label="Quick details"><p className="eyebrow">Quick details · {basicTasks.findIndex(task => task.id === selectedQuickTask.id) + 1} of {basicTasks.length}</p><h2>{selectedQuickTask.title}</h2><label className="description-field">Description<textarea aria-label="Description" maxLength={5000} disabled={!isOnline} value={quickDescription} placeholder="Add helpful context…" onChange={e => setQuickDescription(e.target.value)} onBlur={() => { const description = quickDescription.trim(); if (description !== (selectedQuickTask.description ?? "")) void updateTask(selectedQuickTask, { description }) }}/></label>{selectedQuickTask.due_at && selectedQuickTask.due_is_approx && <div className="chip-row"><span className="chip-group-label">Choose a day</span>{Array.from({ length: 7 }, (_, index) => addLocalDays(startOfLocalWeek(new Date(selectedQuickTask.due_at!)), index)).filter(day => day >= startOfLocalDay(new Date())).map(day => <button key={day.toISOString()} className="choice-chip" onClick={() => void updateTask(selectedQuickTask, { due_at: new Date(day.getFullYear(), day.getMonth(), day.getDate(), 12).toISOString(), due_is_approx: false })}>{day.toLocaleDateString(undefined, { weekday: 'short' })} {day.getDate()}</button>)}</div>}
               <div className="chip-row"><label className="choice-chip date-chip"><CalendarDays size={14}/><span>When</span><input aria-label="When" type="date" value={localDateInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { due_at: e.target.value ? new Date(`${e.target.value}T12:00:00`).toISOString() : null, due_is_approx: false, recurrence_rule: e.target.value ? selectedQuickTask.recurrence_rule : null })}/></label><label className="select-chip"><span>Due time</span><input aria-label="Due time" type="time" value={selectedQuickTask.is_all_day ? "" : localTimeInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { ...(e.target.value ? { due_at: withLocalTime(selectedQuickTask.due_at, e.target.value) } : {}), due_is_approx: false, is_all_day: !e.target.value })}/></label><label className="select-chip"><span>Repeat</span><select aria-label="Repeat" value={selectedQuickTask.recurrence_rule ?? ""} onChange={e => setQuickTaskRepeat(e.target.value)}><option value="">Never</option><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label><label className="select-chip"><span>Reminder</span><select aria-label="Reminder" disabled={!isOnline || !selectedQuickTask.due_at || selectedQuickTask.due_is_approx} value={selectedQuickTask.reminder_offset} onChange={e => void updateTask(selectedQuickTask, { reminder_offset: e.target.value as Task["reminder_offset"] })}><option value="none">None</option><option value="at_time">At due time</option><option value="1_day_before">1 day before</option><option value="2_days_before">2 days before</option></select></label><label className="select-chip"><span>Size</span><select aria-label="Size" value={selectedQuickTask.size ?? ''} onChange={e => void updateTask(selectedQuickTask, { size: (e.target.value || null) as Task['size'] })}><option value="">Not set</option><option value="quick">Quick</option><option value="hour">An hour</option><option value="big">Big</option></select></label><button className={`choice-chip ${selectedQuickTask.is_important ? 'starred' : ''}`} aria-pressed={selectedQuickTask.is_important} onClick={() => void updateTask(selectedQuickTask, { is_important: !selectedQuickTask.is_important })}><Star size={15}/>Important</button><label className="select-chip"><span>Label</span><select aria-label="Label" value={selectedQuickTask.label_id ?? ''} onChange={e => void updateTask(selectedQuickTask, { label_id: e.target.value || null })}><option value="">None</option>{labels.map(label => <option key={label.id} value={label.id}>{label.name}</option>)}</select></label></div><div className="quick-details-actions"><button className="text-button" onClick={() => void finishQuickDetails(true)}>Skip</button><button className="primary-button" onClick={() => void finishQuickDetails(false)}>Done</button></div></section>}
             <section className="day-pane"><div className="pane-heading"><div><p className="eyebrow">Selected day</p><h2>{isSameLocalDay(selectedDay, new Date()) ? 'Today' : todayLabel}</h2></div></div>
@@ -738,13 +758,14 @@ function App() {
             <aside className="week-pane"><div className="pane-heading"><div><p className="eyebrow">Coming up</p><h2>This week</h2></div><button className="text-button pane-link" onClick={() => chooseView('This week')}>Open week</button></div>{renderWeekAgenda(laterThisWeekTasks, selectedDay)}</aside>
           </div>}
           {view === 'This week' && <section className="week-view"><div className="pane-heading"><div><p className="eyebrow">Monday–Sunday</p><h2>This week</h2></div></div>{renderWeekAgenda(visibleTasks)}</section>}
+          {view === 'Inbox' && basicTasks.length > 0 && <aside className="quick-details-prompt details-inbox-prompt"><span>{basicTasks.length} {basicTasks.length === 1 ? 'task could' : 'tasks could'} use more details.</span><button className="secondary-button" onClick={() => openTaskDetailsInInbox(basicTasks[0].id)}>Add details</button></aside>}
           {(view === 'Inbox' || view === 'Later' || view === 'Done') && renderTaskRows(visibleTasks, view)}
           {view === 'Done' && <section className="removed-section"><h2><ArchiveRestore size={17}/>Recently removed</h2>{deletedTasks.length ? deletedTasks.map(task => <div className="removed-row" key={task.id}><span>{task.title}</span><button className="secondary-button" disabled={!isOnline} onClick={() => void restoreTask(task)}><RotateCcw size={14}/>Restore</button></div>) : tasksLoaded ? <p className="removed-empty">Removed tasks can be restored here.</p> : <><span className="sr-only" role="status">Loading tasks</span><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/></>}</section>}
           </div>
         </div>
       </main>
     </div>
-    {toast && <div className={`toast ${toastClosing ? 'toast-closing' : ''}`} role="status"><span>{toast.text}</span>{toast.edit && <button onClick={() => { toast.edit?.(); setToast(null) }}>Edit</button>}<button disabled={!isOnline} onClick={() => { void toast.undo(); setToast(null) }}>Undo</button></div>}
+    {toast && <div className={`toast ${toastClosing ? 'toast-closing' : ''}`} role="status"><span>{toast.text}</span>{toast.action && <button onClick={() => { toast.action?.run(); setToast(null) }}>{toast.action.label}</button>}{toast.undo && <button disabled={!isOnline} onClick={() => { void toast.undo?.(); setToast(null) }}>Undo</button>}</div>}
     <nav className="mobile-tabs" aria-label="Task views">{tabs.map(tab => <button key={tab} className={view === tab ? 'active' : ''} aria-current={view === tab ? 'page' : undefined} onClick={() => chooseView(tab)}>{tab === 'Today' ? <Sun size={16}/> : tab === 'Inbox' ? <Inbox size={16}/> : tab === 'Later' ? <Clock size={16}/> : tab === 'This week' ? <CalendarRange size={16}/> : <CircleCheck size={16}/>} {tab}</button>)}</nav>
   </div>
 }

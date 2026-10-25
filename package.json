@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && node scripts/prune-onnx-wasm.mjs",
+    "build": "tsc -b && vite build && node scripts/package-onnx-wasm.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "preview:local": "vite build && vite preview",
     "test": "vitest run"

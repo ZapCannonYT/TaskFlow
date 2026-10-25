@@ -145,16 +145,11 @@ async function sendToUser(admin: ReturnType<typeof createClient>, prefs: Prefere
       continue
     }
     try {
-      const actions = ['advance', 'due'].includes(reminder.kind)
-        ? [
-          { action: 'done', title: 'Done' },
-          { action: 'later', title: 'Remind me tomorrow' },
-        ]
-        : taskId ? [
-          { action: 'done', title: 'Done' },
-          { action: 'later', title: 'Tomorrow' },
-          { action: 'skip', title: 'Skip today' },
-        ] : []
+      const actions = taskId ? [
+        { action: 'done', title: 'Done' },
+        { action: 'hour', title: '+1 hour' },
+        { action: 'later', title: 'Tomorrow' },
+      ] : []
       await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, JSON.stringify({
         title: String(reminder.payload.title ?? (['advance', 'due'].includes(reminder.kind) ? 'Task reminder' : 'Taskflow')),
         body: String(reminder.payload.body ?? task?.title ?? 'You have a task to look at.'),

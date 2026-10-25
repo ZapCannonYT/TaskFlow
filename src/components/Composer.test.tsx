@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Composer, type ComposerProps } from './Composer'
@@ -36,6 +36,29 @@ describe('Composer', () => {
     await user.type(input, 'Call the dentist{Enter}')
     await waitFor(() => expect(props.onSubmit).toHaveBeenCalledTimes(1))
     expect(props.onSubmit).toHaveBeenCalledWith('Call the dentist', expect.objectContaining({ due_at: null }))
+  })
+
+  it('keeps chips hidden for a whitespace-only title', async () => {
+    const user = userEvent.setup()
+    render(<Composer {...props}/> )
+    await user.type(screen.getByRole('textbox', { name: 'Add a task' }), '   ')
+    expect(screen.queryByRole('group', { name: 'When' })).not.toBeInTheDocument()
+  })
+
+  it('shows chips when the title contains text and keeps the title focused on chip pointerdown', async () => {
+    const user = userEvent.setup()
+    render(<Composer {...props}/> )
+    const input = screen.getByRole('textbox', { name: 'Add a task' })
+    await user.type(input, 'Call the dentist')
+    expect(screen.getByRole('group', { name: 'When' })).toBeInTheDocument()
+    input.focus()
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Today' }))
+    expect(input).toHaveFocus()
+  })
+
+  it('does not autofocus the title field on initial render', () => {
+    render(<Composer {...props}/> )
+    expect(screen.getByRole('textbox', { name: 'Add a task' })).not.toHaveFocus()
   })
 
   it('makes the title read-only while voice capture is listening', () => {

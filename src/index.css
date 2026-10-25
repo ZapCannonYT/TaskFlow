@@ -210,7 +210,6 @@ button:disabled { cursor: default; }
 .quick-details-card { display: grid; justify-content: stretch; }
 .quick-details-card h2 { margin: 0; font-size: 18px; overflow-wrap: anywhere; }
 .quick-details-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
-.content-inner:has(.quick-details-card) > :not(.page-heading):not(.today-split) { display: none; }
 .today-split:has(.quick-details-card) > *:not(.quick-details-card) { display: none; }
 .quick-details-card { margin-top: 8px; }
 .one-thing-reason { margin: 0; color: var(--muted); font-size: 13px; }
@@ -276,6 +275,53 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
   .choice-chip, .select-chip { padding: 0 9px; font-size: 12px; }
   .choice-chip svg, .select-chip svg { flex: 0 0 auto; }
   .auth-card, .setup-card { padding: 26px 22px; }
+}
+
+@media (max-width: 639px) {
+  html, body { overscroll-behavior-y: none; }
+  input, textarea { font-size: 16px; }
+  .topbar { height: 48px; }
+  .workspace { min-height: calc(100dvh - 48px); }
+  .main-content { padding-bottom: calc(var(--composer-h) + var(--tabs-h) + 20px); }
+  .composer {
+    bottom: calc(var(--tabs-h) + 8px + env(safe-area-inset-bottom, 0px));
+    left: 0;
+    width: 100%;
+    padding: 8px 8px calc(env(safe-area-inset-bottom, 0px) + 8px);
+    border-width: 1px 0 0;
+    border-radius: 12px 12px 0 0;
+    transform: none;
+  }
+  body:has(.composer input:focus) .composer {
+    bottom: max(0px, calc(100dvh - var(--vvh, 100dvh)));
+  }
+  .composer-field { min-height: 44px; }
+  .composer-plus { display: none; }
+  .composer-field input { min-height: 44px; }
+  .composer-options {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+    overflow: hidden;
+    padding: 4px 0 0;
+  }
+  .composer-options > .chip-row {
+    min-width: 0;
+    flex-wrap: nowrap;
+    gap: 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .composer-options > .chip-row::-webkit-scrollbar { display: none; }
+  .composer-options .chip-group-label { display: none; }
+  .composer-options .choice-chip, .composer-options .select-chip { min-height: 28px; flex: 0 0 auto; padding: 0 8px; font-size: 12px; }
+  .composer-options .description-field, .composer-options .label-manager { display: none; }
+  .mobile-tabs { padding: 2px 4px calc(2px + env(safe-area-inset-bottom)); }
+  .mobile-tabs button { min-height: 48px; }
+  .task-main { min-height: 48px; }
+  .task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  body:has(.composer input:focus) .mobile-tabs { display: none; }
 }
 
 @media (min-width: 761px) and (max-width: 900px) {
