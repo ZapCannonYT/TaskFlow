@@ -1,15 +1,17 @@
 import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ArchiveRestore, CalendarDays, CalendarRange, Check, CircleCheck, Clock, Download, Inbox, RotateCcw, Star, Sun, X } from 'lucide-react'
 import { isSupabaseConfigured, Label, PushSubscriptionRow, supabase, Task, UserPreferences } from './lib/supabase'
-import { addLocalDays, classifyView, dateForChoice, getSevenDays, isDueOnDay, isMissed, isSameLocalDay, rankOneThing, startOfLocalDay, startOfLocalWeek } from './lib/dates'
+import { addLocalDays, classifyView, dateForChoice, getSevenDays, isDueOnDay, isMissed, isSameLocalDay, localDateInput, localTimeInput, rankOneThing, startOfLocalDay, startOfLocalWeek, withLocalTime } from './lib/dates'
 import { isBasicTask, needsDetailsPrompt } from './lib/quickDetails'
 import { nextOccurrence } from './lib/recurrence'
 import { Composer, type ComposerHandle, type DraftDetails } from './components/Composer'
 import { TaskRow } from './components/TaskRow'
+import { ReminderPicker } from './components/ReminderPicker'
 import { DayGrid } from './components/DayGrid'
 import { DayTaskSheet } from './components/DayTaskSheet'
 import { useVisualViewport } from './lib/useVisualViewport'
 import { useNow } from './lib/useNow'
+import { getMotionPref, prefersReducedMotion, setMotionPref, type MotionPref } from './lib/motion'
 import { isTimed, splitDayTasks } from './features/today/dayLayout'
 
 type View = 'Today' | 'Inbox' | 'Later' | 'This week' | 'Done'
@@ -21,7 +23,6 @@ const SETTLE_START_MS = 420
 const SETTLE_OUT_MS = 220
 const SETTLE_STEP_MS = 0
 const SETTLE_STAGGER_CAP = 0
-const prefersReducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
 const buzz = () => { if (!prefersReducedMotion()) navigator.vibrate?.(10) }
 type PendingCompletion = { completedAt: string; nextTask: Task | null; saved: boolean }
 
@@ -29,25 +30,6 @@ function vapidBytes(value: string) {
   const padding = '='.repeat((4 - value.length % 4) % 4)
   const base64 = (value + padding).replace(/-/g, '+').replace(/_/g, '/')
   return Uint8Array.from(atob(base64), character => character.charCodeAt(0))
-}
-
-function localDateInput(value: string | null) {
-  if (!value) return ''
-  const date = new Date(value)
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-}
-
-function localTimeInput(value: string | null) {
-  if (!value) return ''
-  const date = new Date(value)
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-}
-
-function withLocalTime(value: string | null, time: string) {
-  const date = value ? new Date(value) : new Date(dateForChoice('today').due_at!)
-  const [hours, minutes] = time.split(':').map(Number)
-  date.setHours(hours, minutes, 0, 0)
-  return date.toISOString()
 }
 
 function localDayKey(date: Date) {
@@ -120,6 +102,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsDraft, setSettingsDraft] = useState({ daily_nudge_time: '18:30', quiet_hours_start: '22:30', quiet_hours_end: '08:00', weekly_summary_enabled: true })
   const [pushBusy, setPushBusy] = useState(false)
+  const [motionPref, setMotionPrefState] = useState<MotionPref>(getMotionPref)
   const [quickDetailsTaskId, setQuickDetailsTaskId] = useState<string | null>(null)
   const [quickDescription, setQuickDescription] = useState('')
   const composerRef = useRef<ComposerHandle>(null)
@@ -130,6 +113,15 @@ function App() {
   const setCompleting = (id: string, on: boolean) => setCompletingIds(current => { const next = new Set(current); if (on) next.add(id); else next.delete(id); return next })
   const [notificationMessage, setNotificationMessage] = useState('')
   const [retryPushSetup, setRetryPushSetup] = useState<boolean | null>(null)
+  const [errorRetryable, setErrorRetryable] = useState(false)
+  const [dayKey, setDayKey] = useState(() => localDayKey(new Date()))
+  useEffect(() => {
+    const refresh = () => setDayKey(localDayKey(new Date()))
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh() }
+    const timer = window.setInterval(refresh, 60000)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible) }
+  }, [])
 
   useLayoutEffect(() => {
     const root = document.documentElement
@@ -211,7 +203,7 @@ function App() {
         }
       }
     }
-    setError(loadError)
+    setError(loadError); setErrorRetryable(Boolean(loadError))
     setTasksLoaded(true)
     if (!loadError && userId) {
       try {
@@ -323,8 +315,8 @@ function App() {
     return active.filter(task => task.status === 'open' && !task.is_inbox && task.due_at && new Date(task.due_at) >= weekStart && new Date(task.due_at) < weekEnd)
   }, [tasks, view, selectedDay])
   const deletedTasks = useMemo(() => tasks.filter(task => task.deleted_at), [tasks])
-  const todayDays = useMemo(() => getSevenDays(), [])
-  const weekStart = useMemo(() => startOfLocalWeek(new Date()), [])
+  const todayDays = useMemo(() => getSevenDays(), [dayKey])
+  const weekStart = useMemo(() => startOfLocalWeek(new Date()), [dayKey])
   const weekEnd = useMemo(() => addLocalDays(weekStart, 7), [weekStart])
   const weekTasks = useMemo(() => tasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && task.due_at && new Date(task.due_at) >= weekStart && new Date(task.due_at) < weekEnd), [tasks, weekStart, weekEnd])
   const selectedDayTasks = view === 'Today' ? visibleTasks : []
@@ -351,6 +343,7 @@ function App() {
     if (nextView === 'Today') setSelectedDay(startOfLocalDay(new Date()))
     setViewState(nextView)
     setError('')
+    setErrorRetryable(false)
   }
 
   const selectDay = (day: Date) => { commitCompletions(); setSelectedDay(day) }
@@ -421,7 +414,7 @@ function App() {
     if (failure || !userData.user) { setError(`Export could not be prepared · ${failure?.message ?? 'Sign in again.'}`); return }
     const backup = { format: 'taski-backup', version: 1, exported_at: new Date().toISOString(), user_id: userData.user.id, tasks: taskResult.data ?? [], labels: labelResult.data ?? [], preferences: prefResult.data ?? null }
     const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }))
-    const anchor = document.createElement('a'); anchor.href = url; anchor.download = `taski-backup-${new Date().toISOString().slice(0, 10)}.json`; anchor.click(); URL.revokeObjectURL(url)
+    const anchor = document.createElement('a'); anchor.href = url; anchor.download = `taski-backup-${new Date().toISOString().slice(0, 10)}.json`; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     setError('')
   }
 
@@ -440,7 +433,7 @@ function App() {
       if (labelsToRestore.length) { const result = await supabase.from('labels').upsert(labelsToRestore, { onConflict: 'id' }); if (result.error) throw result.error }
       if (tasksToRestore.length) { const result = await supabase.from('tasks').upsert(tasksToRestore, { onConflict: 'id' }); if (result.error) throw result.error }
       if (backup.preferences) { const { user_id: _userId, ...values } = backup.preferences; const result = await supabase.from('user_preferences').update(values).eq('user_id', userData.user.id); if (result.error) throw result.error }
-      await load(); setError('Backup restored.')
+      await load(); setError(''); setToast({ text: 'Backup restored' })
     } catch (cause) { setError(`Backup not restored · ${cause instanceof Error ? cause.message : 'Check the file and try again.'}`) }
   }
 
@@ -491,6 +484,7 @@ function App() {
     } catch (cause) {
       const detail = cause instanceof Error ? cause.message : 'Try again.'
       setRetryPushSetup(enableDailyNudge)
+      setErrorRetryable(true)
       setError(detail.includes('Registration failed - push service error')
         ? 'Chrome’s push service could not register this device. Retry in a moment. If it keeps happening, check your connection and Chrome’s notification permission for this site.'
         : `Notifications could not be enabled · ${detail}`)
@@ -668,7 +662,7 @@ function App() {
       const next = await client.from('tasks').insert({
         user_id: task.user_id, title: task.title, status: 'open', due_at: nextOccurrence(task.recurrence_rule, task.due_at, task.recurrence_day ?? new Date(task.due_at).getDate(), new Date(completedAt)),
         due_is_approx: false, is_all_day: task.is_all_day, timezone: task.timezone, size: task.size,
-        is_important: task.is_important, label_id: task.label_id, reminder_offset: task.reminder_offset,
+        is_important: task.is_important, label_id: task.label_id, reminder_offset: task.reminder_offset, reminder_minutes: task.reminder_minutes ?? null,
         recurrence_rule: task.recurrence_rule, recurrence_parent_id: task.id, recurrence_day: task.recurrence_day ?? new Date(task.due_at).getDate(),
         description: task.description ?? '', is_inbox: true, details_prompted_at: null,
       }).select('*, labels(name)').single()
@@ -860,6 +854,7 @@ function App() {
             <p className="settings-copy">Taskflow only sends the daily nudge you choose and reminders you set on a task.</p>
             {!pushConfigured && <p className="settings-copy" role="status">Notifications need the public push key configured before this app can enable them.</p>}
             <div className="settings-grid"><label>Daily nudge time<input type="time" value={settingsDraft.daily_nudge_time.slice(0, 5)} onChange={e => setSettingsDraft(d => ({ ...d, daily_nudge_time: e.target.value }))}/></label><label>Quiet hours start<input type="time" value={settingsDraft.quiet_hours_start.slice(0, 5)} onChange={e => setSettingsDraft(d => ({ ...d, quiet_hours_start: e.target.value }))}/></label><label>Quiet hours end<input type="time" value={settingsDraft.quiet_hours_end.slice(0, 5)} onChange={e => setSettingsDraft(d => ({ ...d, quiet_hours_end: e.target.value }))}/></label></div>
+            <div className="settings-grid settings-motion"><label>Motion<select value={motionPref} onChange={e => { const pref = e.target.value as MotionPref; setMotionPref(pref); setMotionPrefState(pref) }}><option value="full">Full animations</option><option value="reduced">Reduced</option><option value="system">Follow system</option></select></label></div>
             <label className="settings-check"><input type="checkbox" checked={settingsDraft.weekly_summary_enabled} onChange={e => setSettingsDraft(d => ({ ...d, weekly_summary_enabled: e.target.checked }))}/>Send a short summary on Sunday</label>
             <div className="settings-actions"><button className="secondary-button" disabled={!isOnline || !preferences} onClick={() => void saveNotificationTimes()}>Save times</button><button className="secondary-button" disabled={!isOnline} onClick={() => void exportBackup()}>Export data</button><label className="secondary-button backup-import">Restore backup<input type="file" accept="application/json,.json" disabled={!isOnline} onChange={e => { void restoreBackup(e.target.files?.[0]); e.currentTarget.value = '' }}/></label>{preferences?.daily_nudge_enabled && devicePushStateChecked && !currentPushEndpoint && <button className="primary-button" disabled={!isOnline || !pushConfigured || pushBusy} onClick={() => void enableNotifications()}>{pushBusy ? 'Setting up…' : 'Set up this device'}</button>}{preferences?.daily_nudge_enabled ? <button className="secondary-button" disabled={!isOnline} onClick={() => void savePreferences({ daily_nudge_enabled: false, prompt_dismissals: 2 })}>Turn off daily nudge</button> : <button className="primary-button" disabled={!isOnline || !pushConfigured || pushBusy} onClick={() => void enableNotifications()}>{pushBusy ? 'Setting up…' : 'Turn on daily nudge'}</button>}{preferences?.daily_nudge_enabled && <button className="secondary-button" disabled={!isOnline || !pushConfigured || pushBusy} onClick={() => void testNotification()}>{pushBusy ? 'Sending…' : 'Send test notification'}</button>}</div>
             <div className="settings-devices"><strong>Devices receiving notifications</strong>{pushSubscriptions.length ? pushSubscriptions.map((device, index) => <div className="settings-device-row" key={device.id}><span>{currentPushEndpoint === device.endpoint ? 'This device' : `Other device ${index + 1}`}</span><button className="text-button" disabled={!isOnline} onClick={() => void removeSubscription(device)}>Remove</button></div>) : <p className="settings-copy">No devices are set up yet.</p>}</div>
@@ -868,7 +863,7 @@ function App() {
           {showNotificationPrompt && <aside className="nudge-offer" aria-label="Daily nudge setup"><span>Want a daily nudge so nothing slips?</span><div><button className="primary-button" disabled={!isOnline || pushBusy} onClick={() => void enableNotifications()}>{pushBusy ? 'Setting up…' : 'Yes'}</button><button className="text-button" disabled={!isOnline} onClick={() => void deferNotificationPrompt()}>Not now</button></div></aside>}
           <div className="page-heading"><h1>{view === 'Today' ? todayLabel : view}</h1></div>
           <Composer ref={composerRef} labels={labels} isOnline={isOnline} busy={busy} onSubmit={addTask} onCreateLabel={createLabel} onRenameLabel={renameLabel} onDeleteLabel={deleteLabel}/>
-          {error && <div className="error-banner" role="alert">{error}<button className="text-button" disabled={!isOnline || pushBusy} onClick={() => retryPushSetup === null ? void load() : void setupPush(retryPushSetup)}>Retry</button></div>}
+          {error && <div className="error-banner" role="alert">{error}{(errorRetryable || retryPushSetup !== null) && <button className="text-button" disabled={!isOnline || pushBusy} onClick={() => retryPushSetup === null ? void load() : void setupPush(retryPushSetup)}>Retry</button>}{!errorRetryable && retryPushSetup === null && <button className="text-button" onClick={() => setError('')}>Dismiss</button>}</div>}
           <div key={view} className="view-enter">
           {view === 'Today' && <section className="day-strip" aria-label="Choose a day">{todayDays.map(day => {
             const count = taskCounts.perDay.get(localDayKey(day)) ?? 0
@@ -877,7 +872,7 @@ function App() {
           {view === 'Today' && <div className="today-split">
             {basicTasks.length > 0 && <aside className="quick-details-prompt"><span>{basicTasks.length} {basicTasks.length === 1 ? 'Inbox task could' : 'Inbox tasks could'} use more details.</span><button className="secondary-button" onClick={() => openTaskDetailsInInbox(basicTasks[0].id)}>Open Inbox</button></aside>}
             {selectedQuickTask && <section className="quick-details-card" aria-label="Quick details"><p className="eyebrow">Edit Inbox task</p><h2>{selectedQuickTask.title}</h2><label className="description-field">Description<textarea aria-label="Description" maxLength={5000} disabled={!isOnline} value={quickDescription} placeholder="Add helpful context…" onChange={e => setQuickDescription(e.target.value)} onBlur={() => { const description = quickDescription.trim(); if (description !== (selectedQuickTask.description ?? "")) void updateTask(selectedQuickTask, { description }) }}/></label>{selectedQuickTask.due_at && selectedQuickTask.due_is_approx && <div className="chip-row"><span className="chip-group-label">Choose a day</span>{Array.from({ length: 7 }, (_, index) => addLocalDays(startOfLocalWeek(new Date(selectedQuickTask.due_at!)), index)).filter(day => day >= startOfLocalDay(new Date())).map(day => <button key={day.toISOString()} className="choice-chip" onClick={() => void updateTask(selectedQuickTask, { due_at: new Date(day.getFullYear(), day.getMonth(), day.getDate(), 12).toISOString(), due_is_approx: false })}>{day.toLocaleDateString(undefined, { weekday: 'short' })} {day.getDate()}</button>)}</div>}
-              <div className="chip-row"><label className="choice-chip date-chip"><CalendarDays size={14}/><span>When</span><input aria-label="When" type="date" value={localDateInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { due_at: e.target.value ? new Date(`${e.target.value}T12:00:00`).toISOString() : null, due_is_approx: false, recurrence_rule: e.target.value ? selectedQuickTask.recurrence_rule : null })}/></label><label className="select-chip"><span>Due time</span><input aria-label="Due time" type="time" value={selectedQuickTask.is_all_day ? "" : localTimeInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { ...(e.target.value ? { due_at: withLocalTime(selectedQuickTask.due_at, e.target.value) } : {}), due_is_approx: false, is_all_day: !e.target.value })}/></label><label className="select-chip"><span>Repeat</span><select aria-label="Repeat" title="Never means this task will not repeat." value={selectedQuickTask.recurrence_rule ?? ""} onChange={e => setQuickTaskRepeat(e.target.value)}><option value="">Never</option><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label><label className="select-chip"><span>Reminder</span><select aria-label="Reminder" disabled={!isOnline || !selectedQuickTask.due_at || selectedQuickTask.due_is_approx} value={selectedQuickTask.reminder_offset} onChange={e => void updateTask(selectedQuickTask, { reminder_offset: e.target.value as Task["reminder_offset"] })}><option value="none">None</option><option value="at_time">At due time</option><option value="1_hour_before">1 hour before</option><option value="1_day_before">1 day before</option><option value="2_days_before">2 days before</option></select></label><label className="select-chip"><span>Size</span><select aria-label="Size" value={selectedQuickTask.size ?? ''} onChange={e => void updateTask(selectedQuickTask, { size: (e.target.value || null) as Task['size'] })}><option value="">Not set</option><option value="quick">Quick</option><option value="hour">An hour</option><option value="big">Big</option></select></label><button className={`choice-chip ${selectedQuickTask.is_important ? 'starred' : ''}`} aria-pressed={selectedQuickTask.is_important} onClick={() => void updateTask(selectedQuickTask, { is_important: !selectedQuickTask.is_important })}><Star size={15}/>Important</button><label className="select-chip"><span>Label</span><select aria-label="Label" value={selectedQuickTask.label_id ?? ''} onChange={e => void updateTask(selectedQuickTask, { label_id: e.target.value || null })}><option value="">None</option>{labels.map(label => <option key={label.id} value={label.id}>{label.name}</option>)}</select></label></div><div className="quick-details-actions"><button className="text-button" onClick={() => void finishQuickDetails(true)}>Skip</button><button className="primary-button" onClick={() => void finishQuickDetails(false)}>Done</button></div></section>}
+              <div className="chip-row"><label className="choice-chip date-chip"><CalendarDays size={14}/><span>When</span><input aria-label="When" type="date" value={localDateInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { due_at: e.target.value ? new Date(`${e.target.value}T12:00:00`).toISOString() : null, due_is_approx: false, recurrence_rule: e.target.value ? selectedQuickTask.recurrence_rule : null })}/></label><label className="select-chip"><span>Due time</span><input aria-label="Due time" type="time" value={selectedQuickTask.is_all_day ? "" : localTimeInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { ...(e.target.value ? { due_at: withLocalTime(selectedQuickTask.due_at, e.target.value) } : {}), due_is_approx: false, is_all_day: !e.target.value })}/></label><label className="select-chip"><span>Repeat</span><select aria-label="Repeat" title="Never means this task will not repeat." value={selectedQuickTask.recurrence_rule ?? ""} onChange={e => setQuickTaskRepeat(e.target.value)}><option value="">Never</option><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label><ReminderPicker offset={selectedQuickTask.reminder_offset} minutes={selectedQuickTask.reminder_minutes} disabled={!isOnline || !selectedQuickTask.due_at || selectedQuickTask.due_is_approx} onChange={values => void updateTask(selectedQuickTask, values)}/><label className="select-chip"><span>Size</span><select aria-label="Size" value={selectedQuickTask.size ?? ''} onChange={e => void updateTask(selectedQuickTask, { size: (e.target.value || null) as Task['size'] })}><option value="">Not set</option><option value="quick">Quick</option><option value="hour">An hour</option><option value="big">Big</option></select></label><button className={`choice-chip ${selectedQuickTask.is_important ? 'starred' : ''}`} aria-pressed={selectedQuickTask.is_important} onClick={() => void updateTask(selectedQuickTask, { is_important: !selectedQuickTask.is_important })}><Star size={15}/>Important</button><label className="select-chip"><span>Label</span><select aria-label="Label" value={selectedQuickTask.label_id ?? ''} onChange={e => void updateTask(selectedQuickTask, { label_id: e.target.value || null })}><option value="">None</option>{labels.map(label => <option key={label.id} value={label.id}>{label.name}</option>)}</select></label></div><div className="quick-details-actions"><button className="text-button" onClick={() => void finishQuickDetails(true)}>Skip</button><button className="primary-button" onClick={() => void finishQuickDetails(false)}>Done</button></div></section>}
             <section className="day-pane">
               {oneThing && !isTimed(oneThing) && <article key={oneThing.id} className={`one-thing-card ${completingIds.has(oneThing.id) ? 'task-completing' : ''} ${settleIndexById.has(oneThing.id) ? 'task-settling' : ''}`}><p className="eyebrow">One thing to start with</p><h3><span className="task-title-text">{oneThing.title}</span></h3><p className="one-thing-reason">{oneThing.is_important ? 'Important' : oneThing.size ? (oneThing.size === 'quick' ? 'Quick task' : oneThing.size === 'hour' ? 'About an hour' : 'A bigger task') : `Due ${isSameLocalDay(selectedDay, new Date()) ? 'today' : selectedDay.toLocaleDateString(undefined, { weekday: 'long' })}`}</p><div className="one-thing-actions"><button className="secondary-button accent-outline-button" disabled={!isOnline || completingIds.has(oneThing.id)} onClick={() => void completeTask(oneThing)}>Done</button><button className="secondary-button" disabled={!isOnline} onClick={() => void moveOneThingToTomorrow(oneThing)}>Tomorrow</button></div></article>}
               {timedTodayTasks.length > 0 && <section className="schedule">

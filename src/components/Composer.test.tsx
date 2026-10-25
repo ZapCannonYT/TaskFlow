@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Composer, type ComposerProps } from './Composer'
@@ -42,30 +42,39 @@ describe('Composer', () => {
     const user = userEvent.setup()
     render(<Composer {...props}/> )
     await user.type(screen.getByRole('textbox', { name: 'Add a task' }), '   ')
-    expect(screen.queryByRole('group', { name: 'When' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'When, size and time' })).not.toBeInTheDocument()
   })
 
-  it('shows chips when the title contains text and keeps the title focused on chip pointerdown', async () => {
-    const user = userEvent.setup()
-    render(<Composer {...props}/> )
-    const input = screen.getByRole('textbox', { name: 'Add a task' })
-    await user.type(input, 'Call the dentist')
-    expect(screen.getByRole('group', { name: 'When' })).toBeInTheDocument()
-    input.focus()
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Today' }))
-    expect(input).toHaveFocus()
-  })
-
-  it('reveals task details in layers and offers a one-hour reminder', async () => {
+  it('shows only When, Size and Time until one of them is set', async () => {
     const user = userEvent.setup()
     render(<Composer {...props}/> )
     await user.type(screen.getByRole('textbox', { name: 'Add a task' }), 'Plan the trip')
+    expect(screen.getByRole('combobox', { name: 'When' })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Size' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Due time')).toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: 'Reminder' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'More details' }))
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Size' }), 'quick')
     expect(screen.getByRole('combobox', { name: 'Reminder' })).toHaveValue('1_hour_before')
-    await user.click(screen.getByRole('button', { name: 'More options' }))
+    expect(screen.getByRole('combobox', { name: 'Label' })).toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: 'Repeat' })).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Description' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Add note' }))
     expect(screen.getByRole('textbox', { name: 'Description' })).toBeInTheDocument()
+  })
+
+  it('saves a custom reminder in minutes', async () => {
+    const user = userEvent.setup()
+    render(<Composer {...props}/> )
+    const input = screen.getByRole('textbox', { name: 'Add a task' })
+    await user.type(input, 'Pay rent')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'When' }), 'tomorrow')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Reminder' }), 'custom')
+    const amount = screen.getByRole('spinbutton', { name: 'Reminder amount' })
+    await user.clear(amount)
+    await user.type(amount, '3')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Reminder unit' }), 'hours')
+    await user.type(input, '{Enter}')
+    await waitFor(() => expect(props.onSubmit).toHaveBeenCalledWith('Pay rent', expect.objectContaining({ reminder_offset: 'custom', reminder_minutes: 180 })))
   })
 
   it('does not autofocus the title field on initial render', () => {

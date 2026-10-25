@@ -71,3 +71,22 @@ export function rankOneThing<T extends {
     return new Date(first.created_at).getTime() - new Date(second.created_at).getTime()
   })
 }
+
+export function localDateInput(value: string | null) {
+  if (!value) return ''
+  const date = new Date(value)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+export function localTimeInput(value: string | null) {
+  if (!value) return ''
+  const date = new Date(value)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+export function withLocalTime(value: string | null, time: string, fallback?: Date) {
+  const date = value ? new Date(value) : new Date((fallback ?? new Date(dateForChoice('today').due_at!)).getTime())
+  const [hours, minutes] = time.split(':').map(Number)
+  date.setHours(hours, minutes, 0, 0)
+  return date.toISOString()
+}
