@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import { env, pipeline } from '@huggingface/transformers'
 import { resampleForWhisper } from './audio'
-import { detectDevice, fallbackChain, pickVoiceModel, type VoiceModelConfig } from './models'
+import { fallbackChain, pickVoiceModel, type VoiceModelConfig } from './models'
 
 const scope = self as DedicatedWorkerGlobalScope
 type Transcriber = Awaited<ReturnType<typeof pipeline>>
@@ -16,14 +16,10 @@ let transcriberWarmupMs = 0
 env.useBrowserCache = true
 // Ship the matching ONNX Runtime with the app so voice capture does not depend on
 // a third-party CDN being reachable from the browser.
-function setRuntimeWasmPaths(device: VoiceModelConfig['device']) {
-  const artifact = device === 'webgpu' ? 'ort-wasm-simd-threaded.jsep' : 'ort-wasm-simd-threaded'
-  env.backends.onnx.wasm!.wasmPaths = {
-    mjs: new URL(`/onnx-runtime/${artifact}.mjs`, self.location.origin).href,
-    wasm: new URL(`/onnx-runtime/${artifact}.wasm`, self.location.origin).href,
-  }
+env.backends.onnx.wasm!.wasmPaths = {
+  mjs: new URL('/onnx-runtime/ort-wasm-simd-threaded.mjs', self.location.origin).href,
+  wasm: new URL('/onnx-runtime/ort-wasm-simd-threaded.wasm', self.location.origin).href,
 }
-setRuntimeWasmPaths('wasm')
 const customModelHost = import.meta.env.VITE_VOICE_MODEL_HOST?.trim()
 if (customModelHost) {
   env.remoteHost = customModelHost.endsWith('/') ? customModelHost : `${customModelHost}/`
@@ -73,7 +69,6 @@ function voiceErrorMessage(error: unknown) {
 }
 
 async function loadModel(config: VoiceModelConfig) {
-  setRuntimeWasmPaths(config.device)
   const options = {
     device: config.device,
     ...(config.dtype ? { dtype: config.dtype as 'q8' | 'fp16' } : {}),
@@ -91,8 +86,7 @@ async function loadModel(config: VoiceModelConfig) {
 
 async function loadTranscriber() {
   const loadStarted = performance.now()
-  const device = await detectDevice()
-  const first = pickVoiceModel(device)
+  const first = pickVoiceModel()
   let lastError: unknown
 
   for (const [index, config] of fallbackChain(first).entries()) {

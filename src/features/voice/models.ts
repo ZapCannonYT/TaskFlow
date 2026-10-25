@@ -27,13 +27,7 @@ export const WHISPER_TINY_EN: VoiceModelConfig = {
   label: 'Whisper Tiny English',
 }
 
-export type DeviceInfo = { isMobile: boolean; deviceMemoryGB: number | undefined; hasWebGPU: boolean }
-
-// To trial Moonshine base on laptops, change rule 3 to return MOONSHINE_BASE after bench results.
-export function pickVoiceModel(d: DeviceInfo): VoiceModelConfig {
-  if (d.isMobile) return MOONSHINE_TINY
-  if (d.deviceMemoryGB !== undefined && d.deviceMemoryGB <= 4) return MOONSHINE_TINY
-  if (d.hasWebGPU) return WHISPER_BASE_EN_GPU
+export function pickVoiceModel(): VoiceModelConfig {
   return MOONSHINE_TINY
 }
 
@@ -41,16 +35,4 @@ export function fallbackChain(first: VoiceModelConfig): VoiceModelConfig[] {
   return [first, MOONSHINE_TINY, WHISPER_TINY_EN].filter(
     (model, index, models) => models.findIndex(candidate => candidate.id === model.id) === index,
   )
-}
-
-export async function detectDevice(): Promise<DeviceInfo> {
-  const nav = navigator as Navigator & {
-    userAgentData?: { mobile?: boolean }
-    deviceMemory?: number
-    gpu?: { requestAdapter: () => Promise<unknown> }
-  }
-  const isMobile = nav.userAgentData?.mobile ?? /Android|iPhone|iPad|Mobile/i.test(nav.userAgent)
-  let hasWebGPU = false
-  try { hasWebGPU = Boolean(nav.gpu && await nav.gpu.requestAdapter()) } catch { hasWebGPU = false }
-  return { isMobile, deviceMemoryGB: nav.deviceMemory, hasWebGPU }
 }
