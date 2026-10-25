@@ -56,6 +56,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const [labelEditor, setLabelEditor] = useState(false)
   const [newLabel, setNewLabel] = useState('')
   const [noteOpen, setNoteOpen] = useState(false)
+  const [focused, setFocused] = useState(false)
   const [hideTranscriptNotice, setHideTranscriptNotice] = useState(false)
   const onVoiceText = (text: string) => setTitle(text.slice(0, 500))
   const voice = useVoiceCapture({ isOnline, onText: onVoiceText })
@@ -105,13 +106,19 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       due_is_approx: rule ? false : current.due_is_approx,
     }))
   }
-  return <form className={`composer ${open ? 'open' : ''}`} onSubmit={submit}>
-    <div className="composer-field"><Plus className="composer-plus" size={19} aria-hidden="true"/><input ref={inputRef} aria-label="Add a task" aria-readonly={voice.state === 'listening'} readOnly={voice.state === 'listening'} placeholder="Add a task…" value={title} maxLength={500} enterKeyHint="done" autoComplete="off" autoCapitalize="sentences" onFocus={event => {
+  // On desktop the composer rests as a small centered pill until it is focused or holds a draft.
+  const voiceBusy = voice.state === 'listening' || voice.state === 'transcribing' || voice.processing || Boolean(voiceMessage)
+  const collapsed = !focused && !title.trim() && !voiceBusy && !labelEditor
+  return <form className={`composer ${open ? 'open' : ''} ${collapsed ? 'collapsed' : ''}`} onSubmit={submit}
+    onFocus={() => setFocused(true)}
+    onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false) }}
+    onClick={event => { if (collapsed && event.target === event.currentTarget) inputRef.current?.focus() }}>
+    <div className="composer-field"><Plus className="composer-plus" size={19} aria-hidden="true"/><input ref={inputRef} aria-label="Add a task" aria-readonly={voice.state === 'listening'} readOnly={voice.state === 'listening'} placeholder="Add a task…" value={title} maxLength={500} enterKeyHint="done" autoComplete="off" onKeyDown={event => { if (event.key === 'Escape' && !title.trim()) event.currentTarget.blur() }} autoCapitalize="sentences" onFocus={event => {
       if (window.innerWidth >= 640) return
       const input = event.currentTarget
       window.setTimeout(() => input.scrollIntoView({ block: 'nearest', behavior: 'auto' }), 100)
       window.setTimeout(() => input.scrollIntoView({ block: 'nearest', behavior: 'auto' }), 300)
-    }} onChange={event => setTitle(event.target.value)} disabled={!isOnline}/><button type="button" className={`icon-button voice-button ${voice.state === 'listening' ? 'listening' : ''}`} aria-label={voice.state === 'listening' ? 'Stop listening' : 'Add by voice'} disabled={!isOnline || voice.processing && voice.state !== 'listening'} onClick={() => voice.state === 'listening' ? voice.stop() : void voice.start(title)}>{voice.state === 'listening' ? <MicOff size={18}/> : <Mic size={18}/>}</button><button className="primary-button add-button" type="submit" disabled={!title.trim() || busy || !isOnline || voice.state === 'listening' || voice.state === 'transcribing' || voice.processing}>{!isOnline ? 'Offline' : busy ? 'Saving…' : voice.state === 'ready' && voice.hasTranscript ? 'Add task' : 'Add'}</button></div>
+    }} onChange={event => setTitle(event.target.value)} disabled={!isOnline}/>{collapsed && <kbd className="composer-kbd" aria-hidden="true">/</kbd>}<button type="button" className={`icon-button voice-button ${voice.state === 'listening' ? 'listening' : ''}`} aria-label={voice.state === 'listening' ? 'Stop listening' : 'Add by voice'} disabled={!isOnline || voice.processing && voice.state !== 'listening'} onClick={() => voice.state === 'listening' ? voice.stop() : void voice.start(title)}>{voice.state === 'listening' ? <MicOff size={18}/> : <Mic size={18}/>}</button><button className="primary-button add-button" type="submit" disabled={!title.trim() || busy || !isOnline || voice.state === 'listening' || voice.state === 'transcribing' || voice.processing}>{!isOnline ? 'Offline' : busy ? 'Saving…' : voice.state === 'ready' && voice.hasTranscript ? 'Add task' : 'Add'}</button></div>
     {(voice.state === 'listening' || voice.state === 'transcribing' || voice.processing || voiceMessage || voice.modelStatus.state === 'downloading' || voice.modelStatus.state === 'error') && <div className="voice-panel"><div className="voice-status-row">{voice.state === 'listening' && <VoiceMeter meterRef={voice.meterRef}/>}<p className="voice-status" role="status">{voiceMessage || (voice.modelStatus.state === 'downloading' ? 'Downloading voice model… this may take a moment.' : voice.modelStatus.state === 'error' && voice.state === 'idle' ? 'Voice could not load. Tap the mic to retry, or type instead.' : '')}</p>{voice.processing && <button type="button" className="text-button" onClick={voice.cancelTranscription}>Stop transcription</button>}{!voice.processing && voice.canRetry && <button type="button" className="text-button" disabled={!isOnline} onClick={voice.retry}>Try again</button>}</div></div>}
     {title.trim().length > 0 && <div className="composer-options">
       <div className="chip-row" role="group" aria-label="When, size and time">

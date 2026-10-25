@@ -296,7 +296,7 @@ function App() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { setExpanded(null); setComposerOpen(false); return }
-      if (!(event.key.toLowerCase() === 'n' || event.key.toLowerCase() === 'c') || event.ctrlKey || event.metaKey || event.altKey) return
+      if (!(event.key === '/' || event.key.toLowerCase() === 'n' || event.key.toLowerCase() === 'c') || event.ctrlKey || event.metaKey || event.altKey) return
       const active = document.activeElement
       if (active instanceof HTMLElement && (active.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName))) return
       event.preventDefault(); openComposer()
