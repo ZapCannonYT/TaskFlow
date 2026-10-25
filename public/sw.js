@@ -62,7 +62,7 @@ self.addEventListener('notificationclick', event => {
   const data = event.notification.data || {}
   const target = new URL(data.url || '/', self.location.origin)
   if (data.reminder_id) {
-    const action = ['done', 'later', 'skip'].includes(event.action) ? event.action : 'open'
+    const action = ['done', 'hour', 'later', 'skip'].includes(event.action) ? event.action : 'open'
     target.searchParams.set('task_action', action)
     if (action !== 'open') target.searchParams.delete('quick_details')
     if (data.task_id) target.searchParams.set('task_id', data.task_id)

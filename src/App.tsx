@@ -88,7 +88,7 @@ function App() {
   const [labels, setLabels] = useState<Label[]>([])
   const [expanded, setExpanded] = useState<string | null>(null)
   const [error, setError] = useState('')
-  const [toast, setToast] = useState<{ text: string; undo: () => Promise<void>; action?: { label: string; run: () => void } } | null>(null)
+  const [toast, setToast] = useState<{ text: string; undo?: () => Promise<void>; action?: { label: string; run: () => void } } | null>(null)
   const [toastClosing, setToastClosing] = useState(false)
   const [newTaskId, setNewTaskId] = useState<string | null>(null)
   const [completingTaskId, setCompletingTaskId] = useState<string | null>(null)
@@ -482,18 +482,23 @@ function App() {
     const action = params.get('task_action')
     const taskId = params.get('task_id')
     const reminderId = params.get('reminder_id')
-    if (!action || !reminderId || !['open', 'done', 'later', 'skip'].includes(action)) return
+    if (!action || !reminderId || !['open', 'done', 'hour', 'later', 'skip'].includes(action)) return
     handledNotificationAction.current = true
     void (async () => {
       if (action === 'done' && taskId) {
         const result = await supabase!.from('tasks').select('*, labels(name)').eq('id', taskId).maybeSingle()
         if (result.error || !result.data) setError(`Task could not be completed · ${result.error?.message ?? 'Task not found.'}`)
         else await completeTask(result.data as Task)
-      } else if (action === 'later' && taskId) {
-        const due = dateForChoice('tomorrow')
-        const result = await supabase!.from('tasks').update({ ...due, updated_at: new Date().toISOString() }).eq('id', taskId).eq('status', 'open')
+      } else if ((action === 'hour' || action === 'later') && taskId) {
+        const due = action === 'hour'
+          ? { due_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(), due_is_approx: false, is_all_day: false }
+          : { ...dateForChoice('tomorrow'), is_all_day: true }
+        const result = await supabase!.from('tasks').update({ ...due, is_inbox: false, updated_at: new Date().toISOString() }).eq('id', taskId).eq('status', 'open')
         if (result.error) setError(`Task could not be moved · ${result.error.message}`)
-        else setTasks(current => current.map(task => task.id === taskId ? { ...task, ...due } : task))
+        else {
+          setTasks(current => current.map(task => task.id === taskId ? { ...task, ...due, is_inbox: false } : task))
+          setToast({ text: action === 'hour' ? 'Snoozed for 1 hour' : 'Moved to tomorrow' })
+        }
       } else if (action === 'skip') {
         const skipped = localDateInput(new Date().toISOString())
         await savePreferences({ skipped_until: skipped })
@@ -760,7 +765,7 @@ function App() {
         </div>
       </main>
     </div>
-    {toast && <div className={`toast ${toastClosing ? 'toast-closing' : ''}`} role="status"><span>{toast.text}</span>{toast.action && <button onClick={() => { toast.action?.run(); setToast(null) }}>{toast.action.label}</button>}<button disabled={!isOnline} onClick={() => { void toast.undo(); setToast(null) }}>Undo</button></div>}
+    {toast && <div className={`toast ${toastClosing ? 'toast-closing' : ''}`} role="status"><span>{toast.text}</span>{toast.action && <button onClick={() => { toast.action?.run(); setToast(null) }}>{toast.action.label}</button>}{toast.undo && <button disabled={!isOnline} onClick={() => { void toast.undo?.(); setToast(null) }}>Undo</button>}</div>}
     <nav className="mobile-tabs" aria-label="Task views">{tabs.map(tab => <button key={tab} className={view === tab ? 'active' : ''} aria-current={view === tab ? 'page' : undefined} onClick={() => chooseView(tab)}>{tab === 'Today' ? <Sun size={16}/> : tab === 'Inbox' ? <Inbox size={16}/> : tab === 'Later' ? <Clock size={16}/> : tab === 'This week' ? <CalendarRange size={16}/> : <CircleCheck size={16}/>} {tab}</button>)}</nav>
   </div>
 }
