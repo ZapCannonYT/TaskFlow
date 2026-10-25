@@ -148,7 +148,8 @@ button:disabled { cursor: default; }
 .task-editor input, .task-editor select { min-height: 40px; min-width: 0; padding: 0 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 13px; }
 .task-editor .choice-chip { margin-bottom: 1px; }
 .removed-section { margin-top: 30px; padding-top: 17px; border-top: 1px solid var(--border); }
-.removed-section h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 15px; }
+.removed-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.removed-section h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 15px; }
 .removed-row { min-height: 50px; display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
 .removed-empty { color: var(--muted); font-size: 13px; }
 .toast { position: fixed; z-index: 5; left: 50%; bottom: 26px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; min-height: 54px; max-width: min(94vw, 620px); padding: 5px 8px 5px 16px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); font-size: 14px; }

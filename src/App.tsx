@@ -107,6 +107,7 @@ function App() {
   const [settlingIds, setSettlingIds] = useState<readonly string[]>([])
   const [completedThisSession, setCompletedThisSession] = useState(0)
   const [sheetTaskId, setSheetTaskId] = useState<string | null>(null)
+  const [clearDeletedBusy, setClearDeletedBusy] = useState(false)
   const [busy, setBusy] = useState(false)
   const [syncStatus, setSyncStatus] = useState(navigator.onLine ? 'Connecting' : 'Offline')
   const [isOnline, setIsOnline] = useState(navigator.onLine)
@@ -686,6 +687,18 @@ function App() {
     setTasks(current => current.map(item => item.id === task.id ? { ...item, deleted_at: null } : item))
   }
 
+  async function clearDeletedTasks() {
+    if (!supabase || !isOnline || !deletedTasks.length || clearDeletedBusy) return
+    if (!window.confirm(`Permanently delete all ${deletedTasks.length} recently deleted ${deletedTasks.length === 1 ? 'task' : 'tasks'}? This cannot be undone.`)) return
+    setClearDeletedBusy(true)
+    const ids = deletedTasks.map(task => task.id)
+    const { error: deleteError } = await supabase.from('tasks').delete().in('id', ids)
+    setClearDeletedBusy(false)
+    if (deleteError) { setError(`Could not clear recently deleted tasks · ${deleteError.message}`); return }
+    setTasks(current => current.filter(task => !ids.includes(task.id)))
+    setToast({ text: 'Recently deleted tasks cleared' })
+  }
+
   async function createLabel(name: string) {
     const cleanName = name.trim()
     if (!supabase || !cleanName || !isOnline) return
@@ -841,7 +854,7 @@ function App() {
           {view === 'This week' && <section className="week-view"><div className="pane-heading"><div><p className="eyebrow">Monday–Sunday</p><h2>This week</h2></div></div>{renderWeekAgenda(visibleTasks)}</section>}
           {view === 'Inbox' && basicTasks.length > 0 && <aside className="quick-details-prompt details-inbox-prompt"><span>{basicTasks.length} {basicTasks.length === 1 ? 'task could' : 'tasks could'} use more details.</span><button className="secondary-button" onClick={() => openTaskDetailsInInbox(basicTasks[0].id)}>Add details</button></aside>}
           {(view === 'Inbox' || view === 'Later' || view === 'Done') && renderTaskRows(visibleTasks, view)}
-          {view === 'Done' && <section className="removed-section"><h2><ArchiveRestore size={17}/>Recently removed</h2>{deletedTasks.length ? deletedTasks.map(task => <div className="removed-row" key={task.id}><span>{task.title}</span><button className="secondary-button" disabled={!isOnline} onClick={() => void restoreTask(task)}><RotateCcw size={14}/>Restore</button></div>) : tasksLoaded ? <p className="removed-empty">Removed tasks can be restored here.</p> : <><span className="sr-only" role="status">Loading tasks</span><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/></>}</section>}
+          {view === 'Done' && <section className="removed-section"><div className="removed-heading"><h2><ArchiveRestore size={17}/>Recently removed</h2>{deletedTasks.length > 0 && <button className="secondary-button" disabled={!isOnline || clearDeletedBusy} onClick={() => void clearDeletedTasks()}>{clearDeletedBusy ? 'Clearing…' : 'Clear all'}</button>}</div>{deletedTasks.length ? deletedTasks.map(task => <div className="removed-row" key={task.id}><span>{task.title}</span><button className="secondary-button" disabled={!isOnline} onClick={() => void restoreTask(task)}><RotateCcw size={14}/>Restore</button></div>) : tasksLoaded ? <p className="removed-empty">Removed tasks can be restored here.</p> : <><span className="sr-only" role="status">Loading tasks</span><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/></>}</section>}
           </div>
         </div>
       </main>
