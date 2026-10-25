@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
 import { Clock3 } from 'lucide-react'
 import { formatTime12 } from '../lib/dates'
 
@@ -8,36 +8,53 @@ type TimePickerProps = {
   disabled?: boolean
   className?: string
   label?: string
+  /** `chip` sits in a chip row; `field` is a bare input in the task editor (phones only; laptops always show the chip). */
+  variant?: 'chip' | 'field'
   onChange(value: string): void
 }
 
-const HOURS = [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
-const MINUTES = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
-const PRESETS = ['09:00', '12:00', '17:00', '20:00']
-const POPOVER_WIDTH = 272
+const HOURS = Array.from({ length: 12 }, (_, i) => String(i + 1))
+const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0'))
+const HALVES = ['AM', 'PM']
+const ITEM_PX = 36
+const POPOVER_WIDTH = 240
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const toValue = (hour12: number, minute: number, pm: boolean) => `${pad((hour12 % 12) + (pm ? 12 : 0))}:${pad(minute)}`
+const isTouch = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
 
-/** A time chip that always reads in 12-hour AM/PM, whatever the browser locale, with a tap-friendly popover. */
-export function TimePicker({ value, disabled, className = '', label = 'Time', onChange }: TimePickerProps) {
+/**
+ * Phones get the browser's own time box, whose wheel already reads well there.
+ * Laptops get a chip in 12-hour AM/PM that opens hour, minute and AM/PM scroll wheels.
+ */
+export function TimePicker(props: TimePickerProps) {
+  const [touch] = useState(isTouch)
+  return touch ? <NativeTime {...props}/> : <WheelTime {...props}/>
+}
+
+function NativeTime({ value, disabled, className = '', label = 'Time', variant = 'chip', onChange }: TimePickerProps) {
+  const input = <input aria-label={label} type="time" disabled={disabled} value={value} onChange={event => onChange(event.target.value)}/>
+  if (variant === 'field') return input
+  return <label className={`select-chip ${className} ${value ? 'active' : ''}`}><span className="sr-only">{label}</span>{input}</label>
+}
+
+function WheelTime({ value, disabled, className = '', label = 'Time', onChange }: TimePickerProps) {
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState<CSSProperties>({})
   const buttonRef = useRef<HTMLButtonElement>(null)
   const popRef = useRef<HTMLDivElement>(null)
-  const [h, m] = value ? value.split(':').map(Number) : [NaN, NaN]
-  const hasValue = Number.isFinite(h)
-  const pm = hasValue ? h >= 12 : false
-  const hour12 = hasValue ? (h % 12 || 12) : null
-  // A minute off the 5-minute grid (typed by voice, say) still shows as selected on its nearest button.
-  const minute = hasValue ? m : null
+  const hasValue = /^\d{1,2}:\d{2}$/.test(value)
+  // With no time set, the wheels start on the next whole hour, like a phone alarm.
+  const [h, m] = hasValue ? value.split(':').map(Number) : [(new Date().getHours() + 1) % 24, 0]
+  const hour12 = h % 12 || 12
+  const pm = h >= 12
 
   useLayoutEffect(() => {
     if (!open || !buttonRef.current) return
     const rect = buttonRef.current.getBoundingClientRect()
     const left = Math.max(8, Math.min(rect.left, window.innerWidth - POPOVER_WIDTH - 8))
     const below = window.innerHeight - rect.bottom
-    setPos(below < 300 && rect.top > below ? { left, bottom: window.innerHeight - rect.top + 6 } : { left, top: rect.bottom + 6 })
+    setPos(below < 280 && rect.top > below ? { left, bottom: window.innerHeight - rect.top + 6 } : { left, top: rect.bottom + 6 })
   }, [open])
 
   useEffect(() => {
@@ -46,7 +63,7 @@ export function TimePicker({ value, disabled, className = '', label = 'Time', on
       const target = event.target as Node
       if (!popRef.current?.contains(target) && !buttonRef.current?.contains(target)) setOpen(false)
     }
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); setOpen(false); buttonRef.current?.focus() } }
+    const onKey = (event: globalThis.KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); setOpen(false); buttonRef.current?.focus() } }
     const onScroll = (event: Event) => { if (!popRef.current?.contains(event.target as Node)) setOpen(false) }
     document.addEventListener('pointerdown', onPointer)
     document.addEventListener('keydown', onKey, true)
@@ -60,39 +77,62 @@ export function TimePicker({ value, disabled, className = '', label = 'Time', on
     }
   }, [open])
 
-  // Picking an hour first guesses the half of the day people usually mean: 8–11 morning, 12–7 afternoon or evening.
-  const pickHour = (hour: number) => onChange(toValue(hour, minute ?? 0, hasValue ? pm : !(hour >= 8 && hour <= 11)))
-  const pickMinute = (next: number) => onChange(toValue(hour12 ?? 12, next, hasValue ? pm : true))
-  const pickHalf = (nextPm: boolean) => onChange(toValue(hour12 ?? (nextPm ? 5 : 9), minute ?? 0, nextPm))
-
   return <span className={`time-picker ${className}`}>
     <button ref={buttonRef} type="button" className={`select-chip time-chip ${hasValue ? 'active' : ''}`} aria-label={hasValue ? `${label}, ${formatTime12(value)}` : label}
       aria-haspopup="dialog" aria-expanded={open} disabled={disabled} onClick={() => setOpen(current => !current)}>
       <Clock3 size={13} aria-hidden="true"/>{hasValue ? formatTime12(value) : label}
     </button>
     {open && <div ref={popRef} className="time-popover" role="dialog" aria-label={`Choose ${label.toLowerCase()}`} style={pos}>
-      <div className="time-popover-head">
-        <strong className="time-readout">{hasValue ? formatTime12(value) : '--:--'}</strong>
-        <div className="time-half" role="radiogroup" aria-label="AM or PM">
-          <button type="button" role="radio" aria-checked={hasValue && !pm} onClick={() => pickHalf(false)}>AM</button>
-          <button type="button" role="radio" aria-checked={hasValue && pm} onClick={() => pickHalf(true)}>PM</button>
-        </div>
-      </div>
-      <span className="time-section-label">Hour</span>
-      <div className="time-grid" role="radiogroup" aria-label="Hour">
-        {HOURS.map(hour => <button key={hour} type="button" role="radio" aria-checked={hour12 === hour} onClick={() => pickHour(hour)}>{hour}</button>)}
-      </div>
-      <span className="time-section-label">Minute</span>
-      <div className="time-grid" role="radiogroup" aria-label="Minute">
-        {MINUTES.map(next => <button key={next} type="button" role="radio" aria-checked={minute !== null && Math.round(minute / 5) * 5 % 60 === next} onClick={() => pickMinute(next)}>:{pad(next)}</button>)}
-      </div>
-      <div className="time-presets">
-        {PRESETS.map(preset => <button key={preset} type="button" className="choice-chip" onClick={() => { onChange(preset); setOpen(false) }}>{formatTime12(preset)}</button>)}
+      <div className="time-wheels">
+        <Wheel label="Hour" items={HOURS} index={hour12 - 1} onSelect={i => onChange(toValue(i + 1, m, pm))}/>
+        <Wheel label="Minute" items={MINUTES} index={m} onSelect={i => onChange(toValue(hour12, i, pm))}/>
+        <Wheel label="AM or PM" items={HALVES} index={pm ? 1 : 0} onSelect={i => onChange(toValue(hour12, m, i === 1))}/>
       </div>
       <div className="time-popover-foot">
         <button type="button" className="text-button" disabled={!hasValue} onClick={() => { onChange(''); setOpen(false) }}>Clear</button>
-        <button type="button" className="primary-button" onClick={() => setOpen(false)}>Done</button>
+        <button type="button" className="primary-button" onClick={() => { if (!hasValue) onChange(toValue(hour12, m, pm)); setOpen(false) }}>Done</button>
       </div>
     </div>}
   </span>
+}
+
+type WheelProps = { label: string; items: string[]; index: number; onSelect(index: number): void }
+
+/** One snapping scroll column; the centred row is the selection. Wheel, drag, click and arrow keys all move it. */
+function Wheel({ label, items, index, onSelect }: WheelProps) {
+  const ref = useRef<HTMLDivElement>(null)
+  const settleRef = useRef<number | undefined>(undefined)
+  const mountedRef = useRef(false)
+
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el || Math.round(el.scrollTop / ITEM_PX) === index) { mountedRef.current = true; return }
+    const top = index * ITEM_PX
+    if (mountedRef.current && typeof el.scrollTo === 'function') el.scrollTo({ top, behavior: 'smooth' })
+    else el.scrollTop = top
+    mountedRef.current = true
+  }, [index])
+  useEffect(() => () => window.clearTimeout(settleRef.current), [])
+
+  const onScroll = () => {
+    window.clearTimeout(settleRef.current)
+    settleRef.current = window.setTimeout(() => {
+      const el = ref.current
+      if (!el) return
+      const next = Math.max(0, Math.min(items.length - 1, Math.round(el.scrollTop / ITEM_PX)))
+      if (next !== index) onSelect(next)
+    }, 100)
+  }
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const step = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0
+    if (!step) return
+    event.preventDefault()
+    onSelect(Math.max(0, Math.min(items.length - 1, index + step)))
+  }
+
+  return <div ref={ref} className="wheel" role="listbox" aria-label={label} tabIndex={0} onScroll={onScroll} onKeyDown={onKeyDown}>
+    <div className="wheel-pad" aria-hidden="true"/>
+    {items.map((item, i) => <div key={item} role="option" aria-selected={i === index} className="wheel-item" onClick={() => onSelect(i)}>{item}</div>)}
+    <div className="wheel-pad" aria-hidden="true"/>
+  </div>
 }

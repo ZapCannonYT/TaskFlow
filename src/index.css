@@ -494,23 +494,20 @@ button, .choice-chip, .select-chip, .nav-item { -webkit-tap-highlight-color: tra
   :root[data-motion="system"] *, :root[data-motion="system"] *::before, :root[data-motion="system"] *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
 }
 
-/* Time picker: a chip that opens a 12-hour grid. Fixed so scrolling chip rows never clip it. */
+/* Time picker (laptops): a chip that opens hour, minute and AM/PM scroll wheels. Fixed so scrolling chip rows never clip it. */
 .time-picker { display: inline-flex; }
 .time-chip { cursor: pointer; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .time-chip.active { color: var(--text); }
-.time-popover { position: fixed; z-index: 70; width: 272px; display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: 0 10px 28px rgba(15, 14, 19, .22); animation: options-enter calc(140ms * var(--m)) var(--ease-out) both; }
-.time-popover-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.time-readout { font-size: 22px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
-.time-half { display: inline-flex; padding: 3px; border: 1px solid var(--border); border-radius: 999px; }
-.time-half button { min-width: 44px; min-height: 30px; padding: 0 10px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-weight: 600; font-size: 13px; }
-.time-half button[aria-checked="true"] { background: var(--accent); color: var(--surface); }
-.time-section-label { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
-.time-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
-.time-grid button { min-height: 34px; padding: 0; border: 1px solid transparent; border-radius: 8px; background: var(--accent-soft); color: var(--text); font-size: 13px; font-variant-numeric: tabular-nums; }
-.time-grid button:hover { border-color: var(--border); }
-.time-grid button[aria-checked="true"] { background: var(--accent); color: var(--surface); font-weight: 600; }
-.time-presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
-.time-presets .choice-chip { min-height: 30px; padding: 0 4px; font-size: 12px; white-space: nowrap; }
-.time-popover-foot { display: flex; justify-content: space-between; align-items: center; padding-top: 2px; }
+.time-popover { position: fixed; z-index: 70; width: 240px; display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); color: var(--text); box-shadow: 0 10px 28px rgba(15, 14, 19, .22); animation: options-enter calc(140ms * var(--m)) var(--ease-out) both; }
+.time-wheels { position: relative; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 2px; }
+.time-wheels::before { content: ''; position: absolute; left: 0; right: 0; top: 72px; height: 36px; border-radius: 10px; background: var(--accent-soft); pointer-events: none; }
+.wheel { position: relative; height: 180px; overflow-y: auto; scroll-snap-type: y mandatory; overscroll-behavior: contain; scrollbar-width: none; outline: 0; border-radius: 10px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 32%, #000 68%, transparent); mask-image: linear-gradient(to bottom, transparent, #000 32%, #000 68%, transparent); }
+.wheel::-webkit-scrollbar { display: none; }
+.wheel:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+.wheel-pad { height: 72px; }
+.wheel-item { height: 36px; display: flex; align-items: center; justify-content: center; scroll-snap-align: center; color: var(--muted); font-size: 17px; font-variant-numeric: tabular-nums; cursor: pointer; user-select: none; transition: color calc(120ms * var(--m)) ease-out; }
+.wheel-item:hover { color: var(--text); }
+.wheel-item[aria-selected="true"] { color: var(--text); font-size: 19px; font-weight: 600; }
+.time-popover-foot { display: flex; justify-content: space-between; align-items: center; }
 .time-popover-foot .primary-button { min-height: 34px; padding: 0 16px; }
-@media (pointer: coarse) { .time-grid button { min-height: 40px; } }
