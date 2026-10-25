@@ -125,8 +125,6 @@ button:disabled { cursor: default; }
 .task-list { display: grid; gap: 0; margin-top: 16px; border-top: 1px solid var(--border); }
 .empty-state { margin: 0; padding: 20px 0; color: var(--muted); font-size: 14px; }
 .task-card { overflow: hidden; border: 0; border-bottom: 1px solid var(--border); background: transparent; }
-.task-entering { animation: task-enter 150ms ease-out both; }
-@keyframes task-enter { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 .task-main { min-height: 58px; display: flex; align-items: center; gap: 10px; padding: 7px 4px; }
 .complete-button { flex: 0 0 40px; width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 50%; background: transparent; color: var(--muted); }
 .complete-button.done-undo-button { flex: 0 0 auto; width: auto; min-width: 68px; height: 44px; gap: 5px; padding: 0 10px; border: 1px solid var(--border); border-radius: 10px; color: var(--accent); font-size: 13px; }
@@ -330,21 +328,10 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
   .today-content { max-width: 790px; }
 }
 
-@keyframes view-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-.view-enter, .settings-panel { animation: view-enter var(--dur) var(--ease-out) both; }
 @keyframes card-enter { from { opacity: 0; transform: scale(.98); } to { opacity: 1; transform: none; } }
 .one-thing-card { animation: card-enter var(--dur) var(--ease-out) both; }
-@keyframes card-exit { to { opacity: 0; transform: scale(.98); } }
-.one-thing-card.task-completing { animation: card-exit 180ms var(--ease-out) both; }
 @keyframes options-enter { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 .composer-options { animation: options-enter 120ms var(--ease-out) both; }
-@keyframes check-pop { 0% { transform: scale(1); } 45% { transform: scale(1.18); } 100% { transform: scale(1); } }
-.task-card.task-completing .complete-button { animation: check-pop 140ms var(--ease-out) both; color: var(--done); }
-.task-card.task-completing .task-title { color: var(--done); text-decoration: line-through; }
-.task-card.task-completing { display: grid; grid-template-rows: 1fr; animation: row-collapse 180ms var(--ease-out) 40ms both; }
-.task-card.task-completing > * { min-height: 0; overflow: hidden; }
-@keyframes row-collapse { to { grid-template-rows: 0fr; opacity: 0; } }
-.choice-chip, .select-chip { transition: transform var(--dur-fast) var(--ease-out), background-color var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast); }
 .select-chip input[type="time"] { max-width: 92px; border: 0; background: transparent; color: inherit; font-size: 13px; }
 .voice-button { position: relative; }
 .voice-button.listening::after { content: ''; position: absolute; inset: 0; border: 2px solid var(--accent); border-radius: inherit; pointer-events: none; animation: voice-pulse 1.2s ease-out infinite; }
@@ -369,4 +356,64 @@ button, .choice-chip, .select-chip, .nav-item { -webkit-tap-highlight-color: tra
   .complete-button.done-undo-button:hover { background: var(--accent-soft); }
   .complete-button:hover { color: var(--accent); background: var(--accent-soft); }
   .icon-button:hover { background: var(--bg); color: var(--text); }
+}
+
+:root { --dur-strike: 520ms; --settle-out: 360ms; --settle-step: 45ms; --toast-ms: 5000ms; }
+
+/* ---- instant paths ---- */
+@keyframes view-enter { from { opacity: 0; } to { opacity: 1; } }
+.view-enter, .settings-panel { animation: view-enter 120ms ease-out both; }
+@keyframes task-flash { from { background: var(--accent-soft); } to { background: transparent; } }
+.task-entering { animation: task-flash 700ms ease-out both; }
+
+.primary-button, .secondary-button, .choice-chip, .select-chip, .day-strip-item, .mobile-tabs button {
+  transition: transform var(--dur-fast) var(--ease-out), background-color var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast);
+}
+.primary-button:active:not(:disabled), .secondary-button:active:not(:disabled), .choice-chip:active:not(:disabled),
+.day-strip-item:active, .mobile-tabs button:active { transform: scale(.97); }
+
+@keyframes star-pop { 0% { transform: scale(1); } 40% { transform: scale(1.3) rotate(-10deg); } 100% { transform: scale(1); } }
+.choice-chip.starred svg { animation: star-pop 240ms var(--ease-out); }
+
+/* ---- the one rich moment: completion ---- */
+.complete-button { position: relative; }
+.complete-button svg { position: relative; }
+.complete-button::before { content: ''; position: absolute; inset: 8px; border-radius: 50%; background: var(--done); opacity: 0; transform: scale(0); pointer-events: none; }
+.complete-button::after { content: ''; position: absolute; inset: 8px; border-radius: 50%; border: 2px solid var(--done); opacity: 0; pointer-events: none; }
+
+@keyframes disc-in { from { opacity: 0; transform: scale(.4); } to { opacity: 1; transform: scale(1); } }
+@keyframes ring-out { from { opacity: .6; transform: scale(1); } to { opacity: 0; transform: scale(1.9); } }
+@keyframes tick-draw { to { stroke-dashoffset: 0; } }
+@keyframes strike-draw { to { background-size: 100% 1.5px; } }
+
+.task-card.task-completing .complete-button, .day-block.task-completing .block-check { color: var(--on-accent); background: transparent; }
+.task-card.task-completing .complete-button::before, .day-block.task-completing .block-check::before { animation: disc-in 240ms var(--ease-out) both; }
+.task-card.task-completing .complete-button::after, .day-block.task-completing .block-check::after { animation: ring-out 520ms ease-out 100ms both; }
+.task-card.task-completing .complete-button svg path, .day-block.task-completing .block-check svg path { stroke-dasharray: 23; stroke-dashoffset: 23; animation: tick-draw 280ms var(--ease-out) 140ms both; }
+
+.task-title-text { background-image: linear-gradient(var(--done), var(--done)); background-repeat: no-repeat; background-position: 0 62%; background-size: 0% 1.5px; }
+.task-completing .task-title-text { animation: strike-draw var(--dur-strike) var(--ease-out) 120ms both; }
+.task-completing .task-title, .one-thing-card.task-completing h3 { color: var(--muted); transition: color 400ms var(--ease-out) 120ms; }
+.one-thing-card.task-completing { background: color-mix(in srgb, var(--done) 14%, var(--surface)); transition: background-color 300ms var(--ease-out); }
+
+@keyframes row-settle { to { grid-template-rows: 0fr; opacity: 0; } }
+@keyframes card-settle { to { opacity: 0; transform: translateY(-6px) scale(.98); } }
+@keyframes block-settle { to { opacity: 0; transform: scale(.96); } }
+.task-card.task-settling { display: grid; grid-template-rows: 1fr; pointer-events: none; animation: row-settle var(--settle-out) var(--ease-out) calc(var(--settle-i, 0) * var(--settle-step)) both; }
+.task-card.task-settling > * { min-height: 0; overflow: hidden; }
+.one-thing-card.task-settling { pointer-events: none; animation: card-settle var(--settle-out) var(--ease-out) both; }
+.day-block.task-settling { pointer-events: none; animation: block-settle var(--settle-out) var(--ease-out) calc(var(--settle-i, 0) * var(--settle-step)) both; }
+
+.toast { overflow: hidden; }
+@keyframes toast-timer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+.toast::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--accent); transform-origin: left; animation: toast-timer var(--toast-ms) linear forwards; }
+.toast.toast-closing::after { animation: none; }
+
+.all-clear { display: grid; justify-items: center; gap: 10px; padding: 36px 0; color: var(--muted); font-size: 14px; }
+.all-clear svg { width: 44px; height: 44px; fill: none; stroke: var(--done); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.all-clear circle { stroke-dasharray: 63; stroke-dashoffset: 63; animation: tick-draw 520ms var(--ease-out) both; }
+.all-clear path { stroke-dasharray: 23; stroke-dashoffset: 23; animation: tick-draw 320ms var(--ease-out) 420ms both; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
 }
