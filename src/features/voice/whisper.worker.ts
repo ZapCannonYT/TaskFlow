@@ -17,8 +17,8 @@ env.useBrowserCache = true
 // Ship the matching ONNX Runtime with the app so voice capture does not depend on
 // a third-party CDN being reachable from the browser.
 env.backends.onnx.wasm!.wasmPaths = {
-  mjs: new URL('/onnx-runtime/ort-wasm-simd-threaded.asyncify.mjs', self.location.origin).href,
-  wasm: new URL('/onnx-runtime/ort-wasm-simd-threaded.asyncify.wasm', self.location.origin).href,
+  mjs: new URL('/onnx-runtime/ort-wasm-simd-threaded.mjs', self.location.origin).href,
+  wasm: new URL('/onnx-runtime/ort-wasm-simd-threaded.wasm', self.location.origin).href,
 }
 const customModelHost = import.meta.env.VITE_VOICE_MODEL_HOST?.trim()
 if (customModelHost) {
