@@ -359,6 +359,8 @@ button, .choice-chip, .select-chip, .nav-item { -webkit-tap-highlight-color: tra
 .view-enter, .settings-panel { animation: view-enter 120ms ease-out both; }
 @keyframes task-flash { from { background: var(--accent-soft); } to { background: transparent; } }
 .task-entering { animation: task-flash 700ms ease-out both; }
+@keyframes task-added-pop { 0% { transform: scale(.985); } 55% { transform: scale(1.01); } 100% { transform: scale(1); } }
+.task-entering .task-main { animation: task-added-pop 240ms var(--ease-out) both; }
 
 .primary-button, .secondary-button, .choice-chip, .select-chip, .day-strip-item, .mobile-tabs button {
   transition: transform var(--dur-fast) var(--ease-out), background-color var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast);
@@ -400,6 +402,8 @@ button, .choice-chip, .select-chip, .nav-item { -webkit-tap-highlight-color: tra
 .day-block.task-settling { pointer-events: none; animation: block-settle var(--settle-out) var(--ease-out) calc(420ms + var(--settle-i, 0) * var(--settle-step)) both; }
 
 .toast { overflow: hidden; }
+@keyframes toast-pop { from { opacity: 0; transform: translateX(-50%) scale(.97); } to { opacity: 1; transform: translateX(-50%) scale(1); } }
+.toast { animation: toast-pop 160ms var(--ease-out) both; }
 @keyframes toast-timer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 .toast::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--accent); transform-origin: left; animation: toast-timer var(--toast-ms) linear forwards; }
 .toast.toast-closing::after { animation: none; }
