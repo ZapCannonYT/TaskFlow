@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { Clock3 } from 'lucide-react'
 import { formatTime12 } from '../lib/dates'
 
@@ -82,7 +83,8 @@ function WheelTime({ value, disabled, className = '', label = 'Time', onChange }
       aria-haspopup="dialog" aria-expanded={open} disabled={disabled} onClick={() => setOpen(current => !current)}>
       <Clock3 size={13} aria-hidden="true"/>{hasValue ? formatTime12(value) : label}
     </button>
-    {open && <div ref={popRef} className="time-popover" role="dialog" aria-label={`Choose ${label.toLowerCase()}`} style={pos}>
+    {/* Portalled to <body>: an animated ancestor (the task editor keeps a transform) would otherwise capture the fixed popover. */}
+    {open && createPortal(<div ref={popRef} className="time-popover" role="dialog" aria-label={`Choose ${label.toLowerCase()}`} style={pos}>
       <div className="time-wheels">
         <Wheel label="Hour" items={HOURS} index={hour12 - 1} onSelect={i => onChange(toValue(i + 1, m, pm))}/>
         <Wheel label="Minute" items={MINUTES} index={m} onSelect={i => onChange(toValue(hour12, i, pm))}/>
@@ -92,7 +94,7 @@ function WheelTime({ value, disabled, className = '', label = 'Time', onChange }
         <button type="button" className="text-button" disabled={!hasValue} onClick={() => { onChange(''); setOpen(false) }}>Clear</button>
         <button type="button" className="primary-button" onClick={() => { if (!hasValue) onChange(toValue(hour12, m, pm)); setOpen(false) }}>Done</button>
       </div>
-    </div>}
+    </div>, document.body)}
   </span>
 }
 
