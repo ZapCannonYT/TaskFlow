@@ -17,10 +17,10 @@ const tabs: View[] = ['Today', 'Inbox', 'Later', 'This week', 'Done']
 
 type BeforeInstallPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }> }
 
-const SETTLE_IDLE_MS = 1100
-const SETTLE_OUT_MS = 360
-const SETTLE_STEP_MS = 45
-const SETTLE_STAGGER_CAP = 5
+const SETTLE_START_MS = 420
+const SETTLE_OUT_MS = 220
+const SETTLE_STEP_MS = 0
+const SETTLE_STAGGER_CAP = 0
 const prefersReducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
 const buzz = () => { if (!prefersReducedMotion()) navigator.vibrate?.(10) }
 type PendingCompletion = { completedAt: string; nextTask: Task | null; saved: boolean }
@@ -642,14 +642,14 @@ function App() {
     window.clearTimeout(settleTimerRef.current)
     window.clearTimeout(commitTimerRef.current)
     if (prefersReducedMotion()) { commitCompletions(); return }
-    settleTimerRef.current = window.setTimeout(startSettle, SETTLE_IDLE_MS)
+    startSettle()
   }
 
   function startSettle() {
     const ids = [...pendingRef.current].filter(([, entry]) => entry.saved).map(([id]) => id)
     if (!ids.length) return
     setSettlingIds(ids)
-    const collapse = SETTLE_OUT_MS + SETTLE_STEP_MS * Math.min(ids.length - 1, SETTLE_STAGGER_CAP) + 40
+    const collapse = SETTLE_START_MS + SETTLE_OUT_MS + SETTLE_STEP_MS * Math.min(ids.length - 1, SETTLE_STAGGER_CAP)
     commitTimerRef.current = window.setTimeout(commitCompletions, collapse)
   }
 

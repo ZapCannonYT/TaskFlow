@@ -351,7 +351,7 @@ button, .choice-chip, .select-chip, .nav-item { -webkit-tap-highlight-color: tra
   .icon-button:hover { background: var(--bg); color: var(--text); }
 }
 
-:root { --dur-strike: 520ms; --settle-out: 360ms; --settle-step: 45ms; --toast-ms: 5000ms; }
+:root { --dur-strike: 260ms; --settle-out: 220ms; --settle-step: 0ms; --toast-ms: 5000ms; }
 
 /* ---- instant paths ---- */
 @keyframes view-enter { from { opacity: 0; } to { opacity: 1; } }
@@ -375,27 +375,28 @@ button, .choice-chip, .select-chip, .nav-item { -webkit-tap-highlight-color: tra
 .complete-button::after { content: ''; position: absolute; inset: 8px; border-radius: 50%; border: 2px solid var(--done); opacity: 0; pointer-events: none; }
 
 @keyframes disc-in { from { opacity: 0; transform: scale(.4); } to { opacity: 1; transform: scale(1); } }
-@keyframes ring-out { from { opacity: .6; transform: scale(1); } to { opacity: 0; transform: scale(1.9); } }
+@keyframes ring-out { from { opacity: .75; transform: scale(.65); } to { opacity: 0; transform: scale(1.8); } }
+@keyframes check-button-pop { 0% { transform: scale(1); } 40% { transform: scale(1.16); } 100% { transform: scale(1); } }
 @keyframes tick-draw { to { stroke-dashoffset: 0; } }
 @keyframes strike-draw { to { background-size: 100% 1.5px; } }
 
-.task-card.task-completing .complete-button, .day-block.task-completing .block-check { color: var(--on-accent); background: transparent; }
-.task-card.task-completing .complete-button::before, .day-block.task-completing .block-check::before { animation: disc-in 240ms var(--ease-out) both; }
-.task-card.task-completing .complete-button::after, .day-block.task-completing .block-check::after { animation: ring-out 520ms ease-out 100ms both; }
-.task-card.task-completing .complete-button svg path, .day-block.task-completing .block-check svg path { stroke-dasharray: 23; stroke-dashoffset: 23; animation: tick-draw 280ms var(--ease-out) 140ms both; }
+.task-card.task-completing .complete-button, .day-block.task-completing .block-check { color: var(--on-accent); background: transparent; animation: check-button-pop 180ms var(--ease-out) both; }
+.task-card.task-completing .complete-button::before, .day-block.task-completing .block-check::before { animation: disc-in 160ms var(--ease-out) both; }
+.task-card.task-completing .complete-button::after, .day-block.task-completing .block-check::after { animation: ring-out 320ms ease-out 60ms both; }
+.task-card.task-completing .complete-button svg path, .day-block.task-completing .block-check svg path { stroke-dasharray: 23; stroke-dashoffset: 23; animation: tick-draw 180ms var(--ease-out) 60ms both; }
 
 .task-title-text { background-image: linear-gradient(var(--done), var(--done)); background-repeat: no-repeat; background-position: 0 62%; background-size: 0% 1.5px; }
-.task-completing .task-title-text { animation: strike-draw var(--dur-strike) var(--ease-out) 120ms both; }
-.task-completing .task-title, .one-thing-card.task-completing h3 { color: var(--muted); transition: color 400ms var(--ease-out) 120ms; }
+.task-completing .task-title-text { animation: strike-draw var(--dur-strike) var(--ease-out) 60ms both; }
+.task-completing .task-title, .one-thing-card.task-completing h3 { color: var(--muted); transition: color 260ms var(--ease-out) 60ms; }
 .one-thing-card.task-completing { background: color-mix(in srgb, var(--done) 14%, var(--surface)); transition: background-color 300ms var(--ease-out); }
 
 @keyframes row-settle { to { grid-template-rows: 0fr; opacity: 0; } }
 @keyframes card-settle { to { opacity: 0; transform: translateY(-6px) scale(.98); } }
 @keyframes block-settle { to { opacity: 0; transform: scale(.96); } }
-.task-card.task-settling { display: grid; grid-template-rows: 1fr; pointer-events: none; animation: row-settle var(--settle-out) var(--ease-out) calc(var(--settle-i, 0) * var(--settle-step)) both; }
+.task-card.task-settling { display: grid; grid-template-rows: 1fr; pointer-events: none; animation: row-settle var(--settle-out) var(--ease-out) calc(420ms + var(--settle-i, 0) * var(--settle-step)) both; }
 .task-card.task-settling > * { min-height: 0; overflow: hidden; }
-.one-thing-card.task-settling { pointer-events: none; animation: card-settle var(--settle-out) var(--ease-out) both; }
-.day-block.task-settling { pointer-events: none; animation: block-settle var(--settle-out) var(--ease-out) calc(var(--settle-i, 0) * var(--settle-step)) both; }
+.one-thing-card.task-settling { pointer-events: none; animation: card-settle var(--settle-out) var(--ease-out) 420ms both; }
+.day-block.task-settling { pointer-events: none; animation: block-settle var(--settle-out) var(--ease-out) calc(420ms + var(--settle-i, 0) * var(--settle-step)) both; }
 
 .toast { overflow: hidden; }
 @keyframes toast-timer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
