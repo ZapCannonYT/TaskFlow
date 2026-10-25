@@ -13,6 +13,7 @@ export type Task = {
   due_at: string | null; due_is_approx: boolean; is_all_day: boolean; timezone: string
   size: 'quick' | 'hour' | 'big' | null; is_important: boolean; label_id: string | null
   recurrence_rule?: RecurrenceRule | null; recurrence_parent_id?: string | null; recurrence_day?: number | null
+  description?: string; is_inbox?: boolean
   reminder_offset: 'none' | 'at_time' | '1_day_before' | '2_days_before'
   details_prompted_at?: string | null
   created_at: string; updated_at: string; completed_at: string | null; deleted_at: string | null

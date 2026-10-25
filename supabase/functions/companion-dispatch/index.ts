@@ -109,7 +109,7 @@ async function sendToUser(admin: ReturnType<typeof createClient>, prefs: Prefere
   const taskId = reminder.task_id ?? (typeof reminder.payload.task_id === 'string' ? reminder.payload.task_id : null)
   let task: Record<string, unknown> | null = null
   if (taskId) {
-    const { data } = await admin.from('tasks').select('id,title,status,deleted_at,due_at,due_is_approx,size,is_important,label_id').eq('id', taskId).eq('user_id', prefs.user_id).maybeSingle()
+    const { data } = await admin.from('tasks').select('id,title,status,deleted_at,due_at,due_is_approx,size,is_important,label_id,recurrence_rule,description,reminder_offset,details_prompted_at').eq('id', taskId).eq('user_id', prefs.user_id).maybeSingle()
     task = data
     if (!task || task.status !== 'open' || task.deleted_at) {
       await admin.from('task_reminders').update({ status: 'cancelled', locked_at: null }).eq('id', reminder.id)
@@ -117,7 +117,8 @@ async function sendToUser(admin: ReturnType<typeof createClient>, prefs: Prefere
     }
     if (reminder.kind === 'details_prompt') {
       const count = Number(Boolean(task.due_at && !task.due_is_approx)) + Number(Boolean(task.size)) + Number(Boolean(task.is_important)) + Number(Boolean(task.label_id))
-      if (count >= 3) {
+        + Number(Boolean(task.recurrence_rule)) + Number(Boolean(typeof task.description === 'string' && task.description.trim())) + Number(Boolean(task.reminder_offset && task.reminder_offset !== 'none'))
+      if (task.details_prompted_at || count >= 5) {
         await admin.from('task_reminders').update({ status: 'cancelled', locked_at: null }).eq('id', reminder.id)
         return 'cancelled'
       }

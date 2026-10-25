@@ -11,7 +11,7 @@ Taskflow is a static Vite application. It does not need Cloudflare Workers, Page
    | Setting | Value |
    | --- | --- |
    | Framework preset | React (Vite) |
-   | Production branch | `main` |
+   | Production branch | `main` once it exists and is ready for release |
    | Build command | `npm run build` |
    | Build output directory | `dist` |
    | Root directory | leave blank, unless this app is moved into a monorepo |
@@ -26,7 +26,8 @@ Taskflow is a static Vite application. It does not need Cloudflare Workers, Page
 
    Use `VITE_SUPABASE_ANON_KEY` only for a legacy Supabase project that does not have a publishable key. These values are intentionally public because Vite embeds `VITE_` variables in the browser build. Never add the VAPID private key, Supabase service-role key, or `TASKFLOW_DISPATCH_SECRET` to Cloudflare.
 
-5. Select **Save and Deploy**. After the build succeeds, open the assigned `https://<project>.pages.dev` URL and verify sign-in, task creation, microphone capture, and a test notification.
+5. If the repository currently only has `dev`, first set `dev` as a preview branch (or temporarily set it as the production branch only if you are comfortable with it deploying publicly). Create/push `main` when the release is ready, then set `main` as the production branch in **Settings** > **Builds & deployments**. Cloudflare can treat the first pushed branch as production by default, so check this setting before the first deployment.
+6. Deploy a preview and open its assigned `https://<branch>.<project>.pages.dev` URL. Verify sign-in, task creation/editing, audit-to-Inbox behavior, microphone capture, and a test notification before making a production deployment.
 
 ## Supabase authentication
 
@@ -45,6 +46,10 @@ If you use Cloudflare preview deployments for sign-in testing, add the specific 
 ## Ongoing deployments
 
 Pushes to the production branch deploy to production. Configure preview deployments for pull requests or non-production branches in Cloudflare Pages so changes can be tested before merging. Environment-variable changes apply to new builds, so trigger a new deployment after changing a `VITE_` value.
+
+## When to deploy
+
+Create the Pages project when you are ready to test the app on a real HTTPS origin, especially for sign-in redirects, installable PWA behavior, and browser notifications. Do not use the production domain until the matching Supabase migrations and Edge Function changes are deployed and the preview build has been checked. The frontend changes in this repo require migration `20261024010000_phase6_descriptions_inbox_audit.sql`; deploy it to Supabase before using this app build against that project. Use the `dev` preview to check changes, then promote a reviewed `main` branch to production.
 
 ## Manual deploy alternative
 
