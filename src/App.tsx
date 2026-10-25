@@ -4,6 +4,7 @@ import { ArchiveRestore, CalendarDays, CalendarRange, Check, CircleCheck, Clock,
 import { isSupabaseConfigured, Label, PushSubscriptionRow, supabase, Task, UserPreferences } from './lib/supabase'
 import { addLocalDays, classifyView, dateForChoice, getSevenDays, isDueOnDay, isMissed, isSameLocalDay, localDateInput, localTimeInput, rankOneThing, startOfLocalDay, startOfLocalWeek, withLocalTime } from './lib/dates'
 import { isBasicTask, needsDetailsPrompt } from './lib/quickDetails'
+import { isRecentDuplicate, preferNewer } from './lib/taskRules'
 import { nextOccurrence } from './lib/recurrence'
 import { Composer, type ComposerHandle, type DraftDetails } from './components/Composer'
 import { TaskRow } from './components/TaskRow'
@@ -111,6 +112,8 @@ function App() {
   const [composerOpen, setComposerOpen] = useState(false)
   const openComposer = useCallback(() => { flushSync(() => setComposerOpen(true)); composerRef.current?.focus() }, [])
   const pendingRef = useRef(new Map<string, PendingCompletion>())
+  const loadSeqRef = useRef(0)
+  const addingRef = useRef(false)
   const settleTimerRef = useRef<number | undefined>(undefined)
   const commitTimerRef = useRef<number | undefined>(undefined)
   const settleIndexById = useMemo(() => new Map(settlingIds.map((id, index) => [id, Math.min(index, SETTLE_STAGGER_CAP)] as const)), [settlingIds])
@@ -174,20 +177,23 @@ function App() {
 
   const load = useCallback(async () => {
     if (!supabase || !navigator.onLine) return
+    const seq = ++loadSeqRef.current
     const [taskResult, labelResult] = await Promise.all([
       supabase.from('tasks').select('*, labels(name)').order('created_at', { ascending: false }),
       supabase.from('labels').select('*').order('name'),
     ])
+    if (seq !== loadSeqRef.current) return
     let loadError = ''
     let resolvedLabels = (labelResult.data ?? []) as Label[]
     if (taskResult.error) loadError = taskResult.error.message
     else {
-      const remoteTasks = (taskResult.data ?? []) as Task[]
+      const fetched = (taskResult.data ?? []) as Task[]
       setTasks(current => {
+        const currentById = new Map(current.map(task => [task.id, task]))
+        const remoteTasks = preferNewer(fetched, currentById)
         const pendingIds = new Set(pendingRef.current.keys())
         if (!pendingIds.size) return remoteTasks
         const pendingNextIds = new Set([...pendingRef.current.values()].flatMap(entry => entry.nextTask ? [entry.nextTask.id] : []))
-        const currentById = new Map(current.map(task => [task.id, task]))
         const remoteIds = new Set(remoteTasks.map(task => task.id))
         return [
           ...remoteTasks.filter(task => !pendingNextIds.has(task.id)).map(task => pendingIds.has(task.id) ? currentById.get(task.id) ?? task : task),
@@ -377,16 +383,20 @@ function App() {
     setError('')
   }
 
-  async function addTask(cleanTitle: string, draft: DraftDetails): Promise<boolean> {
-    if (!supabase || !cleanTitle || busy || !isOnline) return false
+  async function addTask(rawTitle: string, draft: DraftDetails): Promise<boolean> {
+    const cleanTitle = rawTitle.replace(/\s+/g, ' ').trim()
+    if (!supabase || !cleanTitle || busy || addingRef.current || !isOnline) return false
+    if (isRecentDuplicate(tasks, cleanTitle, draft.due_at)) { setToast({ text: 'Already added', compact: true }); return true }
     const client = supabase
+    addingRef.current = true
     setBusy(true); setError('')
     const { data: auth } = await client.auth.getUser()
-    if (!auth.user) { setBusy(false); setError('Sign in again to save this task.'); return false }
+    if (!auth.user) { addingRef.current = false; setBusy(false); setError('Sign in again to save this task.'); return false }
     const result = await client.from('tasks').insert({ user_id: auth.user.id, title: cleanTitle, ...draft, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata' }).select('*, labels(name)').single()
+    addingRef.current = false
     setBusy(false)
     if (result.error) { setError(`Not saved · ${result.error.message}`); return false }
-    setTasks(current => [result.data as Task, ...current]); setError('')
+    setTasks(current => current.some(task => task.id === result.data.id) ? current : [result.data as Task, ...current]); setError('')
     setNewTaskId(result.data.id)
     window.setTimeout(() => setNewTaskId(current => current === result.data.id ? null : current), 720 * motionScale())
     const addedTask = result.data as Task
@@ -395,7 +405,7 @@ function App() {
       text: addDetails ? 'Added to Inbox' : 'Task added',
       compact: true,
       ...(addDetails ? { action: { label: 'Details', run: () => openTaskDetailsInInbox(addedTask.id) } } : {}),
-      undo: async () => { const undone = await client.from('tasks').update({ deleted_at: new Date().toISOString() }).eq('id', result.data.id); if (!undone.error) setTasks(current => current.filter(t => t.id !== result.data.id)); else setError(`Not saved · ${undone.error.message}`) },
+      undo: async () => { const deletedAt = new Date().toISOString(); const undone = await client.from('tasks').update({ deleted_at: deletedAt, updated_at: deletedAt }).eq('id', result.data.id); if (!undone.error) setTasks(current => current.map(t => t.id === result.data.id ? { ...t, deleted_at: deletedAt, updated_at: deletedAt } : t)); else setError(`Not saved · ${undone.error.message}`) },
     })
     return true
   }
@@ -676,8 +686,12 @@ function App() {
         due_is_approx: false, is_all_day: task.is_all_day, timezone: task.timezone, size: task.size,
         is_important: task.is_important, label_id: task.label_id, reminder_offset: task.reminder_offset, reminder_minutes: task.reminder_minutes ?? null,
         recurrence_rule: task.recurrence_rule, recurrence_parent_id: task.id, recurrence_day: task.recurrence_day ?? new Date(task.due_at).getDate(),
-        description: task.description ?? '', is_inbox: true, details_prompted_at: null,
+        description: task.description ?? '', is_inbox: false, details_prompted_at: completedAt,
       }).select('*, labels(name)').single()
+      if (next.error?.code === '23505') {
+        const existing = await client.from('tasks').select('*, labels(name)').eq('recurrence_parent_id', task.id).eq('status', 'open').is('deleted_at', null).maybeSingle()
+        if (existing.data) { next.data = existing.data; next.error = null }
+      }
       if (next.error) {
         await client.from('tasks').update({ status: 'open', completed_at: null, updated_at: new Date().toISOString() }).eq('id', task.id)
         abort(); setError(`Repeat could not be scheduled · ${next.error.message}`); return
@@ -726,15 +740,17 @@ function App() {
     const deletedAt = new Date().toISOString()
     const { error: updateError } = await supabase.from('tasks').update({ deleted_at: deletedAt, updated_at: deletedAt }).eq('id', task.id)
     if (updateError) { setError(`Not saved · ${updateError.message}`); return }
-    setTasks(current => current.map(item => item.id === task.id ? { ...item, deleted_at: deletedAt } : item))
-    setToast({ text: 'Task removed', undo: async () => { const undone = await client.from('tasks').update({ deleted_at: null, updated_at: new Date().toISOString() }).eq('id', task.id); if (!undone.error) setTasks(current => current.map(item => item.id === task.id ? { ...item, deleted_at: null } : item)); else setError(`Not saved · ${undone.error.message}`) } })
+    setTasks(current => current.map(item => item.id === task.id ? { ...item, deleted_at: deletedAt, updated_at: deletedAt } : item))
+    if (expanded === task.id) setExpanded(null)
+    setToast({ text: 'Task removed', undo: async () => { const restoredAt = new Date().toISOString(); const undone = await client.from('tasks').update({ deleted_at: null, updated_at: restoredAt }).eq('id', task.id); if (!undone.error) setTasks(current => current.map(item => item.id === task.id ? { ...item, deleted_at: null, updated_at: restoredAt } : item)); else setError(`Not saved · ${undone.error.message}`) } })
   }
 
   async function restoreTask(task: Task) {
     if (!supabase || !isOnline) return
-    const { error: updateError } = await supabase.from('tasks').update({ deleted_at: null, updated_at: new Date().toISOString() }).eq('id', task.id)
+    const restoredAt = new Date().toISOString()
+    const { error: updateError } = await supabase.from('tasks').update({ deleted_at: null, updated_at: restoredAt }).eq('id', task.id)
     if (updateError) { setError(`Not saved · ${updateError.message}`); return }
-    setTasks(current => current.map(item => item.id === task.id ? { ...item, deleted_at: null } : item))
+    setTasks(current => current.map(item => item.id === task.id ? { ...item, deleted_at: null, updated_at: restoredAt } : item))
   }
 
   async function clearDeletedTasks() {
@@ -789,10 +805,10 @@ function App() {
   }, [])
   const onRowRemove = useCallback((task: Task) => { void rowActionsRef.current.removeTask(task) }, [])
 
-  function renderTaskRows(items: Task[], listName: string, emptyMessage = "Nothing here yet.") {
+  function renderTaskRows(items: Task[], listName: string, emptyMessage = "Nothing here yet.", hideDate = false) {
     return <section className="task-list" aria-label={listName + " tasks"}>
       {!items.length && (tasksLoaded ? <p className="empty-state">{emptyMessage}</p> : <><span className="sr-only" role="status">Loading tasks</span><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/></>)}
-      {items.map(task => <TaskRow key={task.id} task={task} labels={labels} listName={listName} isOnline={isOnline} expanded={expanded === task.id} isNew={newTaskId === task.id} isCompleting={completingIds.has(task.id)} isSettling={settleIndexById.has(task.id)} settleIndex={settleIndexById.get(task.id) ?? 0} onToggleExpand={onToggleTaskExpand} onComplete={onRowComplete} onUpdate={onRowUpdate} onRemove={onRowRemove}/>)}
+      {items.map(task => <TaskRow key={task.id} task={task} labels={labels} listName={listName} hideDate={hideDate} isOnline={isOnline} expanded={expanded === task.id} isNew={newTaskId === task.id} isCompleting={completingIds.has(task.id)} isSettling={settleIndexById.has(task.id)} settleIndex={settleIndexById.get(task.id) ?? 0} onToggleExpand={onToggleTaskExpand} onComplete={onRowComplete} onUpdate={onRowUpdate} onRemove={onRowRemove}/>)}
     </section>
   }
 
@@ -805,7 +821,7 @@ function App() {
     const roughTasks = source.filter(task => task.due_at && task.due_is_approx && (!omitThrough || new Date(task.due_at) > omitThrough))
     if (!exactGroups.length && !roughTasks.length) return tasksLoaded ? <p className="empty-state">No more tasks this week.</p> : <div className="week-agenda"><span className="sr-only" role="status">Loading tasks</span><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/></div>
     return <div className="week-agenda">
-      {exactGroups.map(group => <section className="week-day-group" key={group.day.toISOString()}><h3>{isSameLocalDay(group.day, new Date()) ? 'Today' : group.day.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</h3>{renderTaskRows(group.tasks, group.day.toLocaleDateString(undefined, { weekday: 'long' }))}</section>)}
+      {exactGroups.map(group => <section className="week-day-group" key={group.day.toISOString()}><h3>{isSameLocalDay(group.day, new Date()) ? 'Today' : group.day.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</h3>{renderTaskRows(group.tasks, group.day.toLocaleDateString(undefined, { weekday: 'long' }), undefined, true)}</section>)}
       {roughTasks.length > 0 && <section className="week-day-group"><h3>Sometime this week</h3>{renderTaskRows(roughTasks, 'Sometime this week')}</section>}
     </div>
   }
@@ -873,7 +889,7 @@ function App() {
             {notificationMessage && <p className="settings-copy" role="status">{notificationMessage}</p>}
           </section>}
           {showNotificationPrompt && <aside className="nudge-offer" aria-label="Daily nudge setup"><span>Want a daily nudge so nothing slips?</span><div><button className="primary-button" disabled={!isOnline || pushBusy} onClick={() => void enableNotifications()}>{pushBusy ? 'Setting up…' : 'Yes'}</button><button className="text-button" disabled={!isOnline} onClick={() => void deferNotificationPrompt()}>Not now</button></div></aside>}
-          {view === 'Today' ? <h1 className="sr-only">{todayLabel}</h1> : <div className="page-heading"><h1>{view}</h1></div>}
+          {view === 'Today' ? <h1 className="sr-only">{todayLabel}</h1> : <div className="page-heading"><h1>{view}</h1>{view === 'This week' && <span className="list-caption">{weekStart.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – {addLocalDays(weekStart, 6).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>}</div>}
           <button type="button" className="add-fab" aria-label="Add a task" onClick={openComposer}><Plus size={18}/>Add task</button>
           {composerOpen && <button type="button" className="composer-scrim" aria-label="Close add task" tabIndex={-1} onClick={() => setComposerOpen(false)}/>}
           <Composer ref={composerRef} open={composerOpen} labels={labels} isOnline={isOnline} busy={busy} onSubmit={async (title, draft) => { const saved = await addTask(title, draft); if (saved) setComposerOpen(false); return saved }} onCreateLabel={createLabel} onRenameLabel={renameLabel} onDeleteLabel={deleteLabel}/>
@@ -898,13 +914,13 @@ function App() {
               {(anytimeTasks.length > 0 || timedTodayTasks.length === 0) && <section className="anytime">
                 {timedTodayTasks.length > 0 && <h3 className="lane-heading">Anytime</h3>}
                 {allClear ? <div className="all-clear" role="status"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M20 6 9 17l-5-5"/></svg><p>All clear for today.</p></div>
-                  : renderTaskRows(anytimeTasks, `Anytime on ${todayLabel}`, oneThing || timedTodayTasks.length ? 'No other tasks for this day.' : 'Nothing is planned for this day.')}
+                  : renderTaskRows(anytimeTasks, `Anytime on ${todayLabel}`, oneThing || timedTodayTasks.length ? 'No other tasks for this day.' : 'Nothing is planned for this day.', true)}
               </section>}
               {missedTasks.length > 0 && <section className="missed-list"><h3>Missed</h3>{renderTaskRows(missedTasks, 'Missed tasks')}</section>}
             </section>
             <aside className="week-pane"><div className="pane-heading"><div><p className="eyebrow">Coming up</p><h2>This week</h2></div><button className="text-button pane-link" onClick={() => chooseView('This week')}>Open week</button></div>{renderWeekAgenda(laterThisWeekTasks, selectedDay)}</aside>
           </div>}
-          {view === 'This week' && <section className="week-view"><div className="pane-heading"><div><p className="eyebrow">Monday–Sunday</p><h2>This week</h2></div></div>{renderWeekAgenda(visibleTasks)}</section>}
+          {view === 'This week' && <section className="week-view">{renderWeekAgenda(visibleTasks)}</section>}
           {view === 'Inbox' && basicTasks.length > 0 && <aside className="quick-details-prompt details-inbox-prompt"><span>{basicTasks.length} {basicTasks.length === 1 ? 'task could' : 'tasks could'} use more details.</span><button className="secondary-button" onClick={() => openTaskDetailsInInbox(basicTasks[0].id)}>Add details</button></aside>}
           {view === 'Inbox' && pinnedTask && !visibleTasks.some(task => task.id === pinnedTask.id) && <section className="pinned-edit" aria-label="Task from your schedule"><div className="pinned-edit-head"><h3>From your schedule</h3><button className="text-button" onClick={() => chooseView('Today')}>Back to Today</button></div>{renderTaskRows([pinnedTask], 'From your schedule')}</section>}
           {(view === 'Inbox' || view === 'Later' || view === 'Done') && renderTaskRows(visibleTasks, view)}

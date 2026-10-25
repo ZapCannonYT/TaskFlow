@@ -224,7 +224,7 @@ button:disabled { cursor: default; }
 .missed-list { margin-top: 20px; }
 .missed-list h3 { margin: 0; padding: 0 0 5px; border-bottom: 1px solid var(--border); color: var(--missed); font-size: 14px; font-weight: 600; }
 .missed-list .task-list { margin-top: 8px; }
-.week-day-group .task-list { margin-top: 8px; }
+.week-day-group .task-list, .missed-list .task-list { margin-top: 4px; border-top: 0; }
 .week-day-group .empty-state { padding: 10px 4px; }
 .week-view { max-width: 850px; }
 .week-view .week-agenda { gap: 22px; }
@@ -233,6 +233,7 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
 /* Desktop: the composer rests as a small pill and widens when used. */
 .composer-kbd { display: none; }
 @media (min-width: 761px) {
+  .view-enter { margin-top: 22px; }
   .composer { max-width: 790px; margin: 0 auto; transition: max-width calc(200ms * var(--m)) var(--ease-out), border-radius calc(200ms * var(--m)) var(--ease-out), padding calc(200ms * var(--m)) var(--ease-out); }
   .composer.collapsed { max-width: 280px; padding: 2px 6px 2px 4px; border-radius: 999px; cursor: text; }
   .composer.collapsed .composer-field, .composer.collapsed .composer-field input { min-height: 40px; }
