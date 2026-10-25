@@ -24,6 +24,8 @@ const customModelHost = import.meta.env.VITE_VOICE_MODEL_HOST?.trim()
 if (customModelHost) {
   env.remoteHost = customModelHost.endsWith('/') ? customModelHost : `${customModelHost}/`
   env.remotePathTemplate = '{model}/{file}'
+} else {
+  env.remoteHost = new URL('/voice-model/', self.location.origin).href
 }
 
 function remoteFileUrl(modelId: string, file: string) {
@@ -61,7 +63,7 @@ function isFetchFailure(error: unknown) {
 function voiceErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
   if (isFetchFailure(error)) {
-    return 'Model download blocked. Allow huggingface.co and its hf.co file/CDN hosts, then retry.'
+    return 'Could not download the voice model through Taskflow. Check your connection and retry.'
   }
   return message
 }
