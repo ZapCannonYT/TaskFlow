@@ -174,7 +174,7 @@ async function sendToUser(admin: ReturnType<typeof createClient>, prefs: Prefere
         data: { reminder_id: reminder.id, task_id: taskId, url: isDigest ? '/?open=inbox' : reminder.kind === 'details_prompt' && taskId ? `/?quick_details=${encodeURIComponent(taskId)}` : '/' },
         actions,
         silent: reminder.kind === 'daily_repeat' || reminder.kind === 'details_prompt',
-      }))
+      }), { TTL: 7200, urgency: 'high' }) // Drop it if undeliverable for 2 hours rather than arrive stale; high wakes a sleeping phone.
       delivered++
     } catch (error) {
       const pushError = error as { statusCode?: number; message?: string }
