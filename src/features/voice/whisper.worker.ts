@@ -14,6 +14,12 @@ let transcriberLoadMs = 0
 let transcriberWarmupMs = 0
 
 env.useBrowserCache = true
+// Ship the matching ONNX Runtime with the app so voice capture does not depend on
+// a third-party CDN being reachable from the browser.
+env.backends.onnx.wasm!.wasmPaths = {
+  mjs: new URL('/onnx-runtime/ort-wasm-simd-threaded.asyncify.mjs', self.location.origin).href,
+  wasm: new URL('/onnx-runtime/ort-wasm-simd-threaded.asyncify.wasm', self.location.origin).href,
+}
 const customModelHost = import.meta.env.VITE_VOICE_MODEL_HOST?.trim()
 if (customModelHost) {
   env.remoteHost = customModelHost.endsWith('/') ? customModelHost : `${customModelHost}/`
@@ -48,6 +54,34 @@ function progressCallback(modelId: string) {
   }
 }
 
+function isFetchFailure(error: unknown) {
+  return error instanceof Error && /failed to fetch|networkerror|load failed/i.test(error.message)
+}
+
+function voiceErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  if (isFetchFailure(error)) {
+    return 'Could not download the on-device voice model. Check your connection and allow huggingface.co, then try the mic again.'
+  }
+  return message
+}
+
+async function loadModel(config: VoiceModelConfig) {
+  const options = {
+    device: config.device,
+    ...(config.dtype ? { dtype: config.dtype as 'q8' | 'fp16' } : {}),
+    progress_callback: progressCallback(config.id),
+  }
+  try {
+    return await pipeline('automatic-speech-recognition', config.id, options)
+  } catch (error) {
+    // Browser model downloads occasionally fail before a response is received. A single
+    // retry is cheap and avoids needlessly discarding a spoken task on transient failures.
+    if (!isFetchFailure(error)) throw error
+    return pipeline('automatic-speech-recognition', config.id, options)
+  }
+}
+
 async function loadTranscriber() {
   const loadStarted = performance.now()
   const device = await detectDevice()
@@ -57,11 +91,7 @@ async function loadTranscriber() {
   for (const [index, config] of fallbackChain(first).entries()) {
     if (index > 0) scope.postMessage({ state: 'fallback' })
     try {
-      const loaded = await pipeline('automatic-speech-recognition', config.id, {
-        device: config.device,
-        ...(config.dtype ? { dtype: config.dtype as 'q8' | 'fp16' } : {}),
-        progress_callback: progressCallback(config.id),
-      })
+      const loaded = await loadModel(config)
       transcriberLoadMs = performance.now() - loadStarted
       transcriberConfig = config
       transcriberWarmupMs = await warmTranscriber(loaded)
@@ -116,7 +146,7 @@ async function handleMessage(event: MessageEvent) {
         warmupMs: transcriberWarmupMs,
       })
     } catch (error) {
-      scope.postMessage({ state: 'preload-error', error: error instanceof Error ? error.message : String(error) })
+      scope.postMessage({ state: 'preload-error', error: voiceErrorMessage(error) })
     }
     return
   }
@@ -134,13 +164,13 @@ async function handleMessage(event: MessageEvent) {
     const inferMs = performance.now() - inferStarted
     scope.postMessage({ text: result.text?.trim() ?? '', requestId, kind, timings: { resampleMs, inferMs } })
   } catch (error) {
-    scope.postMessage({ error: error instanceof Error ? error.message : String(error), requestId })
+    scope.postMessage({ error: voiceErrorMessage(error), requestId })
   }
 }
 
 scope.onmessage = event => {
   messageQueue = messageQueue.then(() => handleMessage(event)).catch(error => {
-    scope.postMessage({ error: error instanceof Error ? error.message : String(error), requestId: (event.data as { requestId?: number }).requestId })
+    scope.postMessage({ error: voiceErrorMessage(error), requestId: (event.data as { requestId?: number }).requestId })
   })
   return messageQueue
 }
