@@ -278,6 +278,44 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
   .auth-card, .setup-card { padding: 26px 22px; }
 }
 
+@media (max-width: 639px) {
+  html, body { overscroll-behavior-y: none; }
+  input, textarea { font-size: 16px; }
+  .topbar { height: 48px; }
+  .workspace { min-height: calc(100dvh - 48px); }
+  .main-content { padding-bottom: calc(var(--composer-h) + var(--tabs-h) + 20px); }
+  .composer {
+    bottom: calc(100dvh - var(--vvh, 100dvh));
+    left: 0;
+    width: 100%;
+    padding: 8px 8px calc(env(safe-area-inset-bottom, 0px) + 8px);
+    border-width: 1px 0 0;
+    border-radius: 12px 12px 0 0;
+    transform: none;
+  }
+  .composer-field { min-height: 44px; }
+  .composer-plus { display: none; }
+  .composer-field input { min-height: 44px; }
+  .composer-options {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 6px 0 0;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .composer-options::-webkit-scrollbar { display: none; }
+  .composer-options > .chip-row { flex: 0 0 auto; flex-wrap: nowrap; }
+  .composer-options .chip-group-label { display: none; }
+  .composer-options .choice-chip, .composer-options .select-chip { min-height: 32px; flex: 0 0 auto; padding: 0 10px; font-size: 13px; }
+  .composer-options .description-field, .composer-options .label-manager { display: none; }
+  .mobile-tabs { padding: 2px 4px calc(2px + env(safe-area-inset-bottom)); }
+  .mobile-tabs button { min-height: 48px; }
+  .task-main { min-height: 48px; }
+  .task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  body:has(.composer input:focus) .mobile-tabs { display: none; }
+}
+
 @media (min-width: 761px) and (max-width: 900px) {
   .today-split { grid-template-columns: minmax(0, 1fr); }
   .week-pane { display: none; }

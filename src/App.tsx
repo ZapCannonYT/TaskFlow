@@ -6,6 +6,7 @@ import { isBasicTask, needsDetailsPrompt } from './lib/quickDetails'
 import { nextOccurrence } from './lib/recurrence'
 import { Composer, type ComposerHandle, type DraftDetails } from './components/Composer'
 import { TaskRow } from './components/TaskRow'
+import { useVisualViewport } from './lib/useVisualViewport'
 
 type View = 'Today' | 'Inbox' | 'Later' | 'This week' | 'Done'
 const tabs: View[] = ['Today', 'Inbox', 'Later', 'This week', 'Done']
@@ -76,6 +77,7 @@ function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
 }
 
 function App() {
+  useVisualViewport()
   const [sessionReady, setSessionReady] = useState(!isSupabaseConfigured)
   const [signedIn, setSignedIn] = useState(false)
   const [view, setViewState] = useState<View>('Today')
