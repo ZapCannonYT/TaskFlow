@@ -184,7 +184,20 @@ function App() {
     let loadError = ''
     let resolvedLabels = (labelResult.data ?? []) as Label[]
     if (taskResult.error) loadError = taskResult.error.message
-    else setTasks((taskResult.data ?? []) as Task[])
+    else {
+      const remoteTasks = (taskResult.data ?? []) as Task[]
+      setTasks(current => {
+        const pendingIds = new Set(pendingRef.current.keys())
+        if (!pendingIds.size) return remoteTasks
+        const pendingNextIds = new Set([...pendingRef.current.values()].flatMap(entry => entry.nextTask ? [entry.nextTask.id] : []))
+        const currentById = new Map(current.map(task => [task.id, task]))
+        const remoteIds = new Set(remoteTasks.map(task => task.id))
+        return [
+          ...remoteTasks.filter(task => !pendingNextIds.has(task.id)).map(task => pendingIds.has(task.id) ? currentById.get(task.id) ?? task : task),
+          ...[...pendingIds].flatMap(id => !remoteIds.has(id) && currentById.has(id) ? [currentById.get(id)!] : []),
+        ]
+      })
+    }
     if (labelResult.error) loadError ||= labelResult.error.message
     else {
       const loaded = resolvedLabels
