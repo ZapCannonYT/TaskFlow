@@ -658,7 +658,7 @@ function App() {
   function renderTaskRows(items: Task[], listName: string, emptyMessage = "Nothing here yet.") {
     return <section className="task-list" aria-label={listName + " tasks"}>
       {!items.length && (tasksLoaded ? <p className="empty-state">{emptyMessage}</p> : <><span className="sr-only" role="status">Loading tasks</span><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/></>)}
-      {items.map(task => <TaskRow key={task.id} task={task} labels={labels} listName={listName} isOnline={isOnline} expanded={expanded === task.id} isNew={newTaskId === task.id} isCompleting={completingTaskId === task.id} onToggleExpand={onToggleTaskExpand} onComplete={onRowComplete} onUpdate={onRowUpdate} onRemove={onRowRemove}/>)}
+      {items.map(task => <TaskRow key={task.id} task={task} labels={labels} listName={listName} isOnline={isOnline} expanded={expanded === task.id} isNew={newTaskId === task.id} isCompleting={completingTaskId === task.id} isSettling={false} settleIndex={0} onToggleExpand={onToggleTaskExpand} onComplete={onRowComplete} onUpdate={onRowUpdate} onRemove={onRowRemove}/>)}
     </section>
   }
 

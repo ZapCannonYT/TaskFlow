@@ -15,7 +15,7 @@ const baseVoice = () => ({
 })
 const props: ComposerProps = { labels: [], isOnline: true, busy: false, onSubmit: vi.fn(async () => true), onCreateLabel: vi.fn(async () => undefined), onRenameLabel: vi.fn(async () => undefined), onDeleteLabel: vi.fn(async () => undefined) }
 const task: Task = { id: 'row-1', user_id: 'user-1', title: 'Existing task', status: 'open', due_at: null, due_is_approx: false, is_all_day: false, timezone: 'UTC', size: null, is_important: false, label_id: null, reminder_offset: 'none', created_at: '', updated_at: '', completed_at: null, deleted_at: null }
-const rowProps = { task, labels: [], listName: 'Inbox', isOnline: true, expanded: false, isNew: false, isCompleting: false, onToggleExpand: vi.fn(), onComplete: vi.fn(), onUpdate: vi.fn(), onRemove: vi.fn() }
+const rowProps = { task, labels: [], listName: 'Inbox', isOnline: true, expanded: false, isNew: false, isCompleting: false, isSettling: false, settleIndex: 0, onToggleExpand: vi.fn(), onComplete: vi.fn(), onUpdate: vi.fn(), onRemove: vi.fn() }
 
 describe('Composer', () => {
   beforeEach(() => { vi.clearAllMocks(); mockVoice.mockReturnValue(baseVoice()) })
