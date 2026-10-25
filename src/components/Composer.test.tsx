@@ -51,7 +51,7 @@ describe('Composer', () => {
     await user.type(screen.getByRole('textbox', { name: 'Add a task' }), 'Plan the trip')
     expect(screen.getByRole('combobox', { name: 'When' })).toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: 'Size' })).toBeInTheDocument()
-    expect(screen.getByLabelText('Due time')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Time' })).toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: 'Reminder' })).not.toBeInTheDocument()
     await user.selectOptions(screen.getByRole('combobox', { name: 'Size' }), 'quick')
     expect(screen.getByRole('combobox', { name: 'Reminder' })).toHaveValue('1_hour_before')

@@ -6,16 +6,16 @@ import { addLocalDays, classifyView, dateForChoice, getSevenDays, isDueOnDay, is
 import { isBasicTask, needsDetailsPrompt } from './lib/quickDetails'
 import { isRecentDuplicate, preferNewer } from './lib/taskRules'
 import { rankCompanionTasks } from './lib/companion'
-import { colorVar } from './lib/colors'
 import { nextOccurrence } from './lib/recurrence'
 import { Composer, type ComposerHandle, type DraftDetails } from './components/Composer'
 import { TaskRow } from './components/TaskRow'
+import { TimePicker } from './components/TimePicker'
 import { ReminderPicker } from './components/ReminderPicker'
 import { DayGrid } from './components/DayGrid'
 import { useVisualViewport } from './lib/useVisualViewport'
 import { useNow } from './lib/useNow'
 import { getMotionPref, motionScale, prefersReducedMotion, setMotionPref, type MotionPref } from './lib/motion'
-import { isTimed, splitDayTasks } from './features/today/dayLayout'
+import { splitDayTasks } from './features/today/dayLayout'
 
 type View = 'Today' | 'Inbox' | 'This week' | 'Done'
 const tabs: View[] = ['Today', 'Inbox', 'This week', 'Done']
@@ -330,18 +330,19 @@ function App() {
   // Tasks beyond this week used to live in a separate Later tab; they now close out the week view.
   const afterWeekTasks = useMemo(() => tasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && task.due_at && new Date(task.due_at) >= weekEnd).sort((a, b) => Date.parse(a.due_at!) - Date.parse(b.due_at!)), [tasks, weekEnd])
   const selectedDayTasks = view === 'Today' ? visibleTasks : []
-  const oneThing = view === 'Today' ? rankOneThing(selectedDayTasks)[0] : undefined
+  // The top-ranked task for the day gets a highlight in the schedule.
+  const nextTask = view === 'Today' ? rankOneThing(selectedDayTasks)[0] : undefined
   const { timed: allTimed, anytime: allAnytime } = useMemo(() => splitDayTasks(selectedDayTasks), [selectedDayTasks])
   const missedTasks = useMemo(() => view === 'Today' && isSameLocalDay(selectedDay, new Date())
     ? tasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && isMissed(task))
     : [], [tasks, view, selectedDay])
   const missedIds = useMemo(() => new Set(missedTasks.map(task => task.id)), [missedTasks])
   const timedTodayTasks = useMemo(() => allTimed.filter(task => !missedIds.has(task.id)), [allTimed, missedIds])
-  const anytimeTasks = useMemo(() => allAnytime.filter(task => task.id !== oneThing?.id && !missedIds.has(task.id)), [allAnytime, oneThing?.id, missedIds])
+  const anytimeTasks = useMemo(() => allAnytime.filter(task => !missedIds.has(task.id)), [allAnytime, missedIds])
   const viewingToday = isSameLocalDay(selectedDay, new Date())
   const now = useNow(view === 'Today' && viewingToday)
   const pinnedTask = pinnedEditId ? tasks.find(task => task.id === pinnedEditId && !task.deleted_at && task.status === 'open') : undefined
-  const allClear = view === 'Today' && viewingToday && timedTodayTasks.length === 0 && anytimeTasks.length === 0 && !oneThing && missedTasks.length === 0 && completedThisSession > 0
+  const allClear = view === 'Today' && viewingToday && timedTodayTasks.length === 0 && anytimeTasks.length === 0 && missedTasks.length === 0 && completedThisSession > 0
   const basicTasks = useMemo(() => tasks.filter(task => classifyView(task) === 'Inbox' && needsDetailsPrompt(task)), [tasks])
   const selectedQuickTask = quickDetailsTaskId ? tasks.find(task => task.id === quickDetailsTaskId && task.status === 'open' && !task.deleted_at && task.is_inbox && !task.details_prompted_at) : undefined
   useEffect(() => { setQuickDescription(selectedQuickTask?.description ?? '') }, [selectedQuickTask?.id])
@@ -857,10 +858,6 @@ function App() {
     && (!('Notification' in window) || Notification.permission !== 'denied'))
   // The side pane ranks what is not already on the Today view: other days, and Inbox when nothing else is dated.
   const topTasks = rankCompanionTasks(tasks.filter(task => !task.deleted_at && task.status === 'open' && !missedIds.has(task.id) && !(task.due_at && !task.is_inbox && isSameLocalDay(new Date(task.due_at), selectedDay))), new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC').slice(0, 5).map(entry => entry.task)
-  async function moveOneThingToTomorrow(task: Task) {
-    const due = dateForChoice('tomorrow')
-    await updateTask(task, due)
-  }
   async function installApp() {
     if (!installPrompt) return
     await installPrompt.prompt()
@@ -903,19 +900,18 @@ function App() {
           {view === 'Today' && <div className="today-split">
             {basicTasks.length > 0 && <aside className="quick-details-prompt"><span>{basicTasks.length} {basicTasks.length === 1 ? 'Inbox task could' : 'Inbox tasks could'} use more details.</span><button className="secondary-button" onClick={() => openTaskDetailsInInbox(basicTasks[0].id)}>Open Inbox</button></aside>}
             {selectedQuickTask && <section className="quick-details-card" aria-label="Quick details"><p className="eyebrow">Edit Inbox task</p><h2>{selectedQuickTask.title}</h2><label className="description-field">Description<textarea aria-label="Description" maxLength={5000} disabled={!isOnline} value={quickDescription} placeholder="Add helpful context…" onChange={e => setQuickDescription(e.target.value)} onBlur={() => { const description = quickDescription.trim(); if (description !== (selectedQuickTask.description ?? "")) void updateTask(selectedQuickTask, { description }) }}/></label>{selectedQuickTask.due_at && selectedQuickTask.due_is_approx && <div className="chip-row"><span className="chip-group-label">Choose a day</span>{Array.from({ length: 7 }, (_, index) => addLocalDays(startOfLocalWeek(new Date(selectedQuickTask.due_at!)), index)).filter(day => day >= startOfLocalDay(new Date())).map(day => <button key={day.toISOString()} className="choice-chip" onClick={() => void updateTask(selectedQuickTask, { due_at: new Date(day.getFullYear(), day.getMonth(), day.getDate(), 12).toISOString(), due_is_approx: false })}>{day.toLocaleDateString(undefined, { weekday: 'short' })} {day.getDate()}</button>)}</div>}
-              <div className="chip-row"><label className="choice-chip date-chip"><CalendarDays size={14}/><span>When</span><input aria-label="When" type="date" value={localDateInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { due_at: e.target.value ? new Date(`${e.target.value}T12:00:00`).toISOString() : null, due_is_approx: false, recurrence_rule: e.target.value ? selectedQuickTask.recurrence_rule : null })}/></label><label className="select-chip"><span>Due time</span><input aria-label="Due time" type="time" value={selectedQuickTask.is_all_day ? "" : localTimeInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { ...(e.target.value ? { due_at: withLocalTime(selectedQuickTask.due_at, e.target.value) } : {}), due_is_approx: false, is_all_day: !e.target.value })}/></label><label className="select-chip"><span>Repeat</span><select aria-label="Repeat" title="Never means this task will not repeat." value={selectedQuickTask.recurrence_rule ?? ""} onChange={e => setQuickTaskRepeat(e.target.value)}><option value="">Never</option><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label><ReminderPicker offset={selectedQuickTask.reminder_offset} minutes={selectedQuickTask.reminder_minutes} disabled={!isOnline || !selectedQuickTask.due_at || selectedQuickTask.due_is_approx} onChange={values => void updateTask(selectedQuickTask, values)}/><label className="select-chip"><span>Size</span><select aria-label="Size" value={selectedQuickTask.size ?? ''} onChange={e => void updateTask(selectedQuickTask, { size: (e.target.value || null) as Task['size'] })}><option value="">Not set</option><option value="quick">Quick</option><option value="hour">An hour</option><option value="big">Big</option></select></label><button className={`choice-chip ${selectedQuickTask.is_important ? 'starred' : ''}`} aria-pressed={selectedQuickTask.is_important} onClick={() => void updateTask(selectedQuickTask, { is_important: !selectedQuickTask.is_important })}><Star size={15}/>Important</button><label className="select-chip"><span>Label</span><select aria-label="Label" value={selectedQuickTask.label_id ?? ''} onChange={e => void updateTask(selectedQuickTask, { label_id: e.target.value || null })}><option value="">None</option>{labels.map(label => <option key={label.id} value={label.id}>{label.name}</option>)}</select></label></div><div className="quick-details-actions"><button className="text-button" onClick={() => void finishQuickDetails(true)}>Skip</button><button className="primary-button" onClick={() => void finishQuickDetails(false)}>Done</button></div></section>}
+              <div className="chip-row"><label className="choice-chip date-chip"><CalendarDays size={14}/><span>When</span><input aria-label="When" type="date" value={localDateInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { due_at: e.target.value ? new Date(`${e.target.value}T12:00:00`).toISOString() : null, due_is_approx: false, recurrence_rule: e.target.value ? selectedQuickTask.recurrence_rule : null })}/></label><TimePicker label="Due time" value={selectedQuickTask.is_all_day ? '' : localTimeInput(selectedQuickTask.due_at)} onChange={time => void updateTask(selectedQuickTask, { ...(time ? { due_at: withLocalTime(selectedQuickTask.due_at, time) } : {}), due_is_approx: false, is_all_day: !time })}/><label className="select-chip"><span>Repeat</span><select aria-label="Repeat" title="Never means this task will not repeat." value={selectedQuickTask.recurrence_rule ?? ""} onChange={e => setQuickTaskRepeat(e.target.value)}><option value="">Never</option><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label><ReminderPicker offset={selectedQuickTask.reminder_offset} minutes={selectedQuickTask.reminder_minutes} disabled={!isOnline || !selectedQuickTask.due_at || selectedQuickTask.due_is_approx} onChange={values => void updateTask(selectedQuickTask, values)}/><label className="select-chip"><span>Size</span><select aria-label="Size" value={selectedQuickTask.size ?? ''} onChange={e => void updateTask(selectedQuickTask, { size: (e.target.value || null) as Task['size'] })}><option value="">Not set</option><option value="quick">Quick</option><option value="hour">An hour</option><option value="big">Big</option></select></label><button className={`choice-chip ${selectedQuickTask.is_important ? 'starred' : ''}`} aria-pressed={selectedQuickTask.is_important} onClick={() => void updateTask(selectedQuickTask, { is_important: !selectedQuickTask.is_important })}><Star size={15}/>Important</button><label className="select-chip"><span>Label</span><select aria-label="Label" value={selectedQuickTask.label_id ?? ''} onChange={e => void updateTask(selectedQuickTask, { label_id: e.target.value || null })}><option value="">None</option>{labels.map(label => <option key={label.id} value={label.id}>{label.name}</option>)}</select></label></div><div className="quick-details-actions"><button className="text-button" onClick={() => void finishQuickDetails(true)}>Skip</button><button className="primary-button" onClick={() => void finishQuickDetails(false)}>Done</button></div></section>}
             <section className="day-pane">
-              {oneThing && !isTimed(oneThing) && <article key={oneThing.id} style={oneThing.color ? ({ '--task-color': colorVar(oneThing.color) } as React.CSSProperties) : undefined} className={`one-thing-card ${oneThing.color ? 'has-color' : ''} ${completingIds.has(oneThing.id) ? 'task-completing' : ''} ${settleIndexById.has(oneThing.id) ? 'task-settling' : ''}`}><p className="eyebrow">One thing to start with</p><h3><span className="task-title-text">{oneThing.title}</span></h3><p className="one-thing-reason">{oneThing.is_important ? 'Important' : oneThing.size ? (oneThing.size === 'quick' ? 'Quick task' : oneThing.size === 'hour' ? 'About an hour' : 'A bigger task') : `Due ${isSameLocalDay(selectedDay, new Date()) ? 'today' : selectedDay.toLocaleDateString(undefined, { weekday: 'long' })}`}</p><div className="one-thing-actions"><button className="secondary-button accent-outline-button" disabled={!isOnline || completingIds.has(oneThing.id)} onClick={() => void completeTask(oneThing)}>Done</button><button className="secondary-button" disabled={!isOnline} onClick={() => void moveOneThingToTomorrow(oneThing)}>Tomorrow</button></div></article>}
               {timedTodayTasks.length > 0 && <section className="schedule">
                 <h3 className="lane-heading">Schedule</h3>
-                <DayGrid timed={timedTodayTasks} now={viewingToday ? now : null} nextTaskId={oneThing?.id}
+                <DayGrid timed={timedTodayTasks} now={viewingToday ? now : null} nextTaskId={nextTask?.id}
                   completingIds={completingIds} settleIndexById={settleIndexById} isOnline={isOnline}
                   onComplete={onRowComplete} onOpen={openFromSchedule}/>
               </section>}
               {(anytimeTasks.length > 0 || timedTodayTasks.length === 0) && <section className="anytime">
                 {timedTodayTasks.length > 0 && <h3 className="lane-heading">Anytime</h3>}
                 {allClear ? <div className="all-clear" role="status"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M20 6 9 17l-5-5"/></svg><p>All clear for today.</p></div>
-                  : renderTaskRows(anytimeTasks, `Anytime on ${todayLabel}`, oneThing || timedTodayTasks.length ? 'No other tasks for this day.' : 'Nothing is planned for this day.', true)}
+                  : renderTaskRows(anytimeTasks, `Anytime on ${todayLabel}`, timedTodayTasks.length ? 'No other tasks for this day.' : 'Nothing is planned for this day.', true)}
               </section>}
               {missedTasks.length > 0 && <section className="missed-list"><h3>Missed</h3>{renderTaskRows(missedTasks, 'Missed tasks')}</section>}
             </section>

@@ -8,6 +8,7 @@ import { useVoiceCapture } from '../features/voice/useVoiceCapture'
 import { VoiceMeter } from '../features/voice/VoiceMeter'
 import { ReminderPicker } from './ReminderPicker'
 import { ColorPicker } from './ColorPicker'
+import { TimePicker } from './TimePicker'
 
 export type DraftDetails = { due_at: string | null; due_is_approx: boolean; is_all_day: boolean; size: Task['size']; is_important: boolean; label_id: string | null; recurrence_rule: Task['recurrence_rule']; description: string; reminder_offset: Task['reminder_offset']; reminder_minutes: number | null; color: Task['color']; is_inbox: boolean }
 export type ComposerHandle = { focus(): void; startVoice(): void; setTitle(value: string): void }
@@ -132,7 +133,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           <input ref={dateRef} className="when-date-input" aria-label="Pick a date" tabIndex={-1} type="date" disabled={!isOnline} value={dateInput(draft.due_at)} onChange={event => setDraft(current => ({ ...current, due_at: event.target.value ? withTime(new Date(`${event.target.value}T12:00:00`).toISOString(), timeInput(current.due_at) || '12:00') : null, due_is_approx: false, recurrence_rule: event.target.value ? current.recurrence_rule : null }))}/>
         </label>
         <label className={`select-chip ${draft.size ? 'active' : ''}`}><span className="sr-only">Size</span><select aria-label="Size" value={draft.size ?? ''} disabled={!isOnline} onChange={event => setDraft(current => ({ ...current, size: (event.target.value || null) as Task['size'] }))}><option value="">Size</option><option value="quick">Quick</option><option value="hour">An hour</option><option value="big">Big</option></select></label>
-        <label className={`select-chip due-time-chip ${hasTime ? 'active' : ''}`}><span className="sr-only">Time</span><input aria-label="Due time" type="time" disabled={!isOnline} value={hasTime ? timeInput(draft.due_at) : ''} onChange={event => setDraft(current => ({ ...current, due_at: event.target.value ? withTime(current.due_at, event.target.value) : current.due_at, due_is_approx: event.target.value ? false : current.due_is_approx, is_all_day: !event.target.value }))}/></label>
+        <TimePicker className="due-time-chip" value={hasTime ? timeInput(draft.due_at) : ''} disabled={!isOnline} onChange={time => setDraft(current => ({ ...current, due_at: time ? withTime(current.due_at, time) : current.due_at, due_is_approx: time ? false : current.due_is_approx, is_all_day: !time }))}/>
       </div>
       {showSecondRow && <div className="chip-row detail-row composer-row-two">
         <ReminderPicker offset={draft.reminder_offset} minutes={draft.reminder_minutes} disabled={!isOnline || !draft.due_at || draft.due_is_approx} onChange={values => setDraft(current => ({ ...current, reminder_offset: values.reminder_offset, reminder_minutes: values.reminder_minutes ?? null }))}/>

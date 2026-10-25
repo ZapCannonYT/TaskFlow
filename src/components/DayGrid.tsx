@@ -14,8 +14,8 @@ type DayGridProps = {
   onComplete(task: Task): void
   onOpen(task: Task): void
 }
-const timeFmt = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' })
-const hourFmt = new Intl.DateTimeFormat(undefined, { hour: 'numeric' })
+const timeFmt = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+const hourFmt = new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: true })
 const LABEL_GUTTER_PX = 52
 
 export const DayGrid = memo(function DayGrid({ timed, now, nextTaskId, completingIds, settleIndexById, isOnline, onComplete, onOpen }: DayGridProps) {

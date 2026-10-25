@@ -211,17 +211,12 @@ button:disabled { cursor: default; }
 .pane-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 13px; }
 .pane-heading h2 { margin: 4px 0 0; font-size: 19px; letter-spacing: -.02em; }
 .pane-link { white-space: nowrap; }
-.one-thing-card { display: grid; gap: 8px; margin-bottom: 14px; padding: 19px; border: 1px solid var(--border); border-radius: 14px; background: var(--accent-soft); }
-.one-thing-card h3 { margin: 0; font-size: 19px; line-height: 1.35; overflow-wrap: anywhere; }
-.one-thing-card .eyebrow { color: var(--muted); }
 .quick-details-prompt, .quick-details-card { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 0 0 14px; padding: 13px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); font-size: 14px; }
 .quick-details-card { display: grid; justify-content: stretch; }
 .quick-details-card h2 { margin: 0; font-size: 18px; overflow-wrap: anywhere; }
 .quick-details-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .today-split:has(.quick-details-card) > *:not(.quick-details-card) { display: none; }
 .quick-details-card { margin-top: 8px; }
-.one-thing-reason { margin: 0; color: var(--muted); font-size: 13px; }
-.one-thing-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 3px; }
 .accent-outline-button { border-color: var(--accent); color: var(--accent); }
 .week-agenda { display: grid; gap: 17px; }
 .week-day-group h3 { margin: 0; padding: 0 0 5px; border-bottom: 1px solid var(--border); font-size: 14px; font-weight: 600; }
@@ -344,7 +339,6 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
 }
 
 @keyframes card-enter { from { opacity: 0; transform: scale(.98); } to { opacity: 1; transform: none; } }
-.one-thing-card { animation: card-enter calc(var(--dur) * var(--m)) var(--ease-out) both; }
 @keyframes composer-drop { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
 @keyframes options-enter { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 .composer-options { animation: options-enter calc(120ms * var(--m)) var(--ease-out) both; }
@@ -425,15 +419,13 @@ button, .choice-chip, .select-chip, .nav-item { -webkit-tap-highlight-color: tra
 
 .task-title-text { background-image: linear-gradient(var(--done), var(--done)); background-repeat: no-repeat; background-position: 0 62%; background-size: 0% 1.5px; }
 .task-completing .task-title-text { animation: strike-draw var(--dur-strike) var(--ease-out) calc(60ms * var(--m)) both; }
-.task-completing .task-title, .one-thing-card.task-completing h3 { color: var(--muted); transition: color calc(260ms * var(--m)) var(--ease-out) calc(60ms * var(--m)); }
-.one-thing-card.task-completing { background: color-mix(in srgb, var(--done) 14%, var(--surface)); transition: background-color calc(300ms * var(--m)) var(--ease-out); }
+.task-completing .task-title { color: var(--muted); transition: color calc(260ms * var(--m)) var(--ease-out) calc(60ms * var(--m)); }
 
 @keyframes row-settle { to { grid-template-rows: 0fr; opacity: 0; } }
 @keyframes card-settle { to { opacity: 0; transform: translateY(-6px) scale(.98); } }
 @keyframes block-settle { to { opacity: 0; transform: scale(.96); } }
 .task-card.task-settling { display: grid; grid-template-rows: 1fr; pointer-events: none; animation: row-settle var(--settle-out) var(--ease-out) calc(420ms * var(--m) + var(--settle-i, 0) * var(--settle-step)) both; }
 .task-card.task-settling > * { min-height: 0; overflow: hidden; }
-.one-thing-card.task-settling { pointer-events: none; animation: card-settle var(--settle-out) var(--ease-out) calc(420ms * var(--m)) both; }
 .day-block.task-settling { pointer-events: none; animation: block-settle var(--settle-out) var(--ease-out) calc(420ms * var(--m) + var(--settle-i, 0) * var(--settle-step)) both; }
 
 .toast { overflow: hidden; }
@@ -478,7 +470,6 @@ button, .choice-chip, .select-chip, .nav-item { -webkit-tap-highlight-color: tra
 /* A task opened from the schedule sits, expanded, at the top of Inbox. */
 /* Task colour: a left accent on rows and cards, and a tinted schedule block. */
 .task-card.has-color { box-shadow: inset 3px 0 0 var(--task-color); }
-.one-thing-card.has-color { border-left: 4px solid var(--task-color); }
 .day-block.has-color { border-left-color: var(--task-color); background: color-mix(in srgb, var(--task-color) 16%, var(--surface)); }
 .day-block.has-color.task-completing { border-left-color: var(--done); background: color-mix(in srgb, var(--done) 14%, var(--surface)); }
 .color-picker { position: relative; display: inline-flex; }
@@ -502,3 +493,24 @@ button, .choice-chip, .select-chip, .nav-item { -webkit-tap-highlight-color: tra
 @media (prefers-reduced-motion: reduce) {
   :root[data-motion="system"] *, :root[data-motion="system"] *::before, :root[data-motion="system"] *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
 }
+
+/* Time picker: a chip that opens a 12-hour grid. Fixed so scrolling chip rows never clip it. */
+.time-picker { display: inline-flex; }
+.time-chip { cursor: pointer; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.time-chip.active { color: var(--text); }
+.time-popover { position: fixed; z-index: 70; width: 272px; display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: 0 10px 28px rgba(15, 14, 19, .22); animation: options-enter calc(140ms * var(--m)) var(--ease-out) both; }
+.time-popover-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.time-readout { font-size: 22px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.time-half { display: inline-flex; padding: 3px; border: 1px solid var(--border); border-radius: 999px; }
+.time-half button { min-width: 44px; min-height: 30px; padding: 0 10px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-weight: 600; font-size: 13px; }
+.time-half button[aria-checked="true"] { background: var(--accent); color: var(--surface); }
+.time-section-label { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.time-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
+.time-grid button { min-height: 34px; padding: 0; border: 1px solid transparent; border-radius: 8px; background: var(--accent-soft); color: var(--text); font-size: 13px; font-variant-numeric: tabular-nums; }
+.time-grid button:hover { border-color: var(--border); }
+.time-grid button[aria-checked="true"] { background: var(--accent); color: var(--surface); font-weight: 600; }
+.time-presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.time-presets .choice-chip { min-height: 30px; padding: 0 4px; font-size: 12px; white-space: nowrap; }
+.time-popover-foot { display: flex; justify-content: space-between; align-items: center; padding-top: 2px; }
+.time-popover-foot .primary-button { min-height: 34px; padding: 0 16px; }
+@media (pointer: coarse) { .time-grid button { min-height: 40px; } }
