@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import type { TaskColor } from './colors'
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const publicKey = (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY) as string | undefined
@@ -16,6 +17,7 @@ export type Task = {
   description?: string; is_inbox?: boolean
   reminder_offset: 'none' | 'at_time' | '1_hour_before' | '1_day_before' | '2_days_before' | 'custom'
   reminder_minutes?: number | null
+  color?: TaskColor | null
   details_prompted_at?: string | null
   created_at: string; updated_at: string; completed_at: string | null; deleted_at: string | null
   labels?: Pick<Label, 'name'> | null

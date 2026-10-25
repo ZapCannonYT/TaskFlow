@@ -7,8 +7,9 @@ import { isBasicTask } from '../lib/quickDetails'
 import { useVoiceCapture } from '../features/voice/useVoiceCapture'
 import { VoiceMeter } from '../features/voice/VoiceMeter'
 import { ReminderPicker } from './ReminderPicker'
+import { ColorPicker } from './ColorPicker'
 
-export type DraftDetails = { due_at: string | null; due_is_approx: boolean; is_all_day: boolean; size: Task['size']; is_important: boolean; label_id: string | null; recurrence_rule: Task['recurrence_rule']; description: string; reminder_offset: Task['reminder_offset']; reminder_minutes: number | null; is_inbox: boolean }
+export type DraftDetails = { due_at: string | null; due_is_approx: boolean; is_all_day: boolean; size: Task['size']; is_important: boolean; label_id: string | null; recurrence_rule: Task['recurrence_rule']; description: string; reminder_offset: Task['reminder_offset']; reminder_minutes: number | null; color: Task['color']; is_inbox: boolean }
 export type ComposerHandle = { focus(): void; startVoice(): void; setTitle(value: string): void }
 export type ComposerProps = {
   open?: boolean
@@ -20,7 +21,7 @@ export type ComposerProps = {
   onRenameLabel(label: Label, name: string): Promise<void>
   onDeleteLabel(label: Label): Promise<void>
 }
-const blankDetails = (): DraftDetails => ({ due_at: null, due_is_approx: false, is_all_day: true, size: null, is_important: false, label_id: null, recurrence_rule: null, description: '', reminder_offset: '1_hour_before', reminder_minutes: null, is_inbox: true })
+const blankDetails = (): DraftDetails => ({ due_at: null, due_is_approx: false, is_all_day: true, size: null, is_important: false, label_id: null, recurrence_rule: null, description: '', reminder_offset: '1_hour_before', reminder_minutes: null, color: null, is_inbox: true })
 const WHEN_CHOICES: ReadonlyArray<readonly [WhenChoice, string]> = [['today', 'Today'], ['tomorrow', 'Tomorrow'], ['weekend', 'This weekend'], ['next-week', 'Next week']]
 function dateInput(value: string | null) {
   if (!value) return ''
@@ -138,6 +139,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         <label className={`select-chip label-select ${draft.label_id ? 'active' : ''}`}><span className="sr-only">Label</span><select aria-label="Label" value={draft.label_id ?? ''} disabled={!isOnline} onChange={event => { if (event.target.value === '__edit') { setLabelEditor(true); return } setDraft(current => ({ ...current, label_id: event.target.value || null })) }}><option value="">Label</option>{labels.map(label => <option value={label.id} key={label.id}>{label.name}</option>)}<option value="__edit">Edit labels…</option></select></label>
         <label className={`select-chip ${draft.recurrence_rule ? 'active' : ''}`} title="Never means this task will not repeat."><Repeat size={13} aria-hidden="true"/><span className="sr-only">Repeat</span><select aria-label="Repeat" value={draft.recurrence_rule ?? ''} disabled={!isOnline} onChange={event => setRecurrence((event.target.value || null) as Task['recurrence_rule'])}><option value="">Never</option><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label>
         <button type="button" disabled={!isOnline} className={`choice-chip icon-chip ${draft.is_important ? 'starred' : ''}`} aria-label={draft.is_important ? 'Remove Important' : 'Mark Important'} aria-pressed={draft.is_important} onClick={() => setDraft(current => ({ ...current, is_important: !current.is_important }))}><Star size={15}/>Important</button>
+        <ColorPicker value={draft.color} disabled={!isOnline} onChange={color => setDraft(current => ({ ...current, color }))}/>
         {!noteOpen && <button type="button" className="text-button add-note" disabled={!isOnline} onClick={() => setNoteOpen(true)}>Add note</button>}
       </div>}
       {showSecondRow && noteOpen && <label className="description-field">Note<textarea aria-label="Description" maxLength={5000} disabled={!isOnline} value={draft.description} placeholder="Add a description or helpful context…" autoFocus onChange={event => setDraft(current => ({ ...current, description: event.target.value }))}/></label>}

@@ -22,6 +22,8 @@
   --tabs-h: 64px;
   --composer-h: 0px;
   --done: #1E6B3A;
+  --c-red: #C2362B; --c-orange: #C2620A; --c-yellow: #9C7A00; --c-green: #2D7A3E;
+  --c-teal: #0E7A7A; --c-blue: #2D5FB8; --c-purple: #6E45B5; --c-pink: #B8407A;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -50,6 +52,8 @@
     --due-soft: #4A2A10;
     --star: #F2D65A;
     --done: #7FD39A;
+    --c-red: #F08C7E; --c-orange: #F5A55C; --c-yellow: #EBCB55; --c-green: #7FD39A;
+    --c-teal: #6CD0CC; --c-blue: #8FB4F2; --c-purple: #C4A8F5; --c-pink: #F09CC6;
   }
 }
 
@@ -472,6 +476,22 @@ button, .choice-chip, .select-chip, .nav-item { -webkit-tap-highlight-color: tra
 
 @keyframes scrim-in { from { opacity: 0; } to { opacity: 1; } }
 /* A task opened from the schedule sits, expanded, at the top of Inbox. */
+/* Task colour: a left accent on rows and cards, and a tinted schedule block. */
+.task-card.has-color { box-shadow: inset 3px 0 0 var(--task-color); }
+.one-thing-card.has-color { border-left: 4px solid var(--task-color); }
+.day-block.has-color { border-left-color: var(--task-color); background: color-mix(in srgb, var(--task-color) 16%, var(--surface)); }
+.day-block.has-color.task-completing { border-left-color: var(--done); background: color-mix(in srgb, var(--done) 14%, var(--surface)); }
+.color-picker { position: relative; display: inline-flex; }
+.color-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--swatch); border: 1px solid var(--border); }
+.color-swatches { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.color-picker .color-swatches { position: absolute; z-index: 6; top: calc(100% + 6px); left: 0; padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 6px 18px rgba(15, 14, 19, .18); flex-wrap: nowrap; animation: options-enter calc(120ms * var(--m)) var(--ease-out) both; }
+.color-swatch { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 2px solid transparent; border-radius: 50%; background: var(--swatch); color: var(--surface); }
+.color-swatch[aria-checked="true"] { border-color: var(--text); }
+.color-swatch.none { border: 1px dashed var(--border); background: transparent; color: var(--muted); }
+.color-field { min-width: 0; }
+.color-field .color-swatches { min-height: 40px; }
+@media (pointer: coarse) { .color-swatch { width: 32px; height: 32px; } }
+
 .pinned-edit { margin: 0 0 18px; padding: 4px 12px 2px; border: 1px solid var(--accent); border-radius: 12px; background: var(--surface); animation: card-enter calc(var(--dur) * var(--m)) var(--ease-out) both; }
 .pinned-edit-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .pinned-edit-head h3 { margin: 0; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }

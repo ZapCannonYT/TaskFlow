@@ -2,6 +2,7 @@ import { memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } 
 import { Check, Circle } from 'lucide-react'
 import type { Task } from '../lib/supabase'
 import { layoutDay, shortTitle } from '../features/today/dayLayout'
+import { colorVar } from '../lib/colors'
 
 type DayGridProps = {
   timed: Task[]
@@ -49,10 +50,11 @@ export const DayGrid = memo(function DayGrid({ timed, now, nextTaskId, completin
             left: `calc(${(block.col / block.cols) * 100}% + 2px)`,
             width: `calc(${100 / block.cols}% - 4px)`,
             '--settle-i': settle ?? 0,
+            ...(task.color ? { '--task-color': colorVar(task.color) } : {}),
           } as CSSProperties
           const time = timeFmt.format(new Date(task.due_at!))
           return <div key={task.id} style={style} title={compact ? `${task.title} · ${time}` : undefined}
-            className={`day-block ${compact ? 'compact' : ''} ${task.is_important ? 'is-important' : ''} ${task.id === nextTaskId ? 'is-next' : ''} ${completing ? 'task-completing' : ''} ${settle !== undefined ? 'task-settling' : ''}`}>
+            className={`day-block ${task.color ? 'has-color' : ''} ${compact ? 'compact' : ''} ${task.is_important ? 'is-important' : ''} ${task.id === nextTaskId ? 'is-next' : ''} ${completing ? 'task-completing' : ''} ${settle !== undefined ? 'task-settling' : ''}`}>
             <button type="button" className="complete-button block-check" disabled={!isOnline}
               aria-label={completing ? `Undo completion of ${task.title}` : `Complete ${task.title}`} onClick={() => onComplete(task)}>
               {completing ? <Check size={compact ? 14 : 16}/> : <Circle size={compact ? 16 : 19}/>}
