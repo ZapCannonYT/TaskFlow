@@ -109,7 +109,7 @@ Why these choices:
 - **`kind`** tells the dispatcher which copy, sound, and budget rules apply (a silent `details_prompt` is treated very differently from a normal `daily` nudge).
 - **`size`, `is_important`, `label_id`** are plain columns, not stored scores. The ranking is computed fresh each time from these and the due date, so changing a task instantly changes what gets recommended.
 - **`delivered_via`** records which channel actually delivered a reminder, so the same reminder is never shown twice (once by push, once in the app).
-- **Custom reminder offsets** let a task reminder be set to "Custom…" with a number and a unit (minutes, hours, or days). The choice is stored as `reminder_offset = 'custom'` with the length in `reminder_minutes` (1 to 40320, that is 28 days). Migration `supabase/migrations/20261026000000_custom_reminder.sql` adds the column and constraints and updates the `sync_task_reminder` trigger. It must be applied with `supabase db push`.
+- **Custom reminder offsets** let a task reminder be set to "Custom…" with a number and a unit (minutes, hours, or days). The choice is stored as `reminder_offset = 'custom'` with the length in `reminder_minutes` (1 to 40320, that is 28 days). Migration `supabase/migrations/20261026000000_phase7_custom_reminder.sql` adds the column and constraints and updates the `sync_task_reminder` trigger. It must be applied with `supabase db push`.
 
 Every table has RLS on. Secrets (service-role key, VAPID private key) live only in Edge Function environment variables, never in `VITE_` variables.
 

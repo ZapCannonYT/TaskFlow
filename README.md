@@ -5,7 +5,7 @@ Taskflow is a responsive, installable React app backed by Supabase Auth and Post
 ## Run locally
 
 1. Create a Supabase project.
-2. In its SQL editor, run the Phase 1 migration if you have not already. For Phase 3, follow the ordered setup below: deploy the functions and set secrets, run the schema migration, add Vault values, then install the separate scheduler migration. This prevents cron from calling an unconfigured endpoint. Also apply `20261022020000_phase4_voice_phase5_quick_details.sql`, `20261024000000_phase5_recurrence.sql`, `20261024010000_phase6_descriptions_inbox_audit.sql`, and `20261025000000_phase7_inbox_and_reminders.sql` in order. Also apply `20261026000000_custom_reminder.sql` with `supabase db push` (see Custom reminders below).
+2. In its SQL editor, run the Phase 1 migration if you have not already. For Phase 3, follow the ordered setup below: deploy the functions and set secrets, run the schema migration, add Vault values, then install the separate scheduler migration. This prevents cron from calling an unconfigured endpoint. Also apply `20261022020000_phase4_voice_phase5_quick_details.sql`, `20261024000000_phase5_recurrence.sql`, `20261024010000_phase6_descriptions_inbox_audit.sql`, and `20261025000000_phase7_inbox_and_reminders.sql` in order. Also apply `20261026000000_phase7_custom_reminder.sql` with `supabase db push` (see Custom reminders below).
 3. Copy `.env.example` to `.env` and set `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, and (after Phase 3 push setup) `VITE_VAPID_PUBLIC_KEY`. The VAPID public key is safe in the browser; never put a secret, VAPID private key, dispatch token, or service-role key in a `VITE_` variable.
 4. Install and start:
 
@@ -74,7 +74,7 @@ Cloud transcription needs a connection and a signed-in session. On this path, au
 
 ## Custom reminders
 
-A task reminder can be set to **Custom…**, followed by a number and a unit (minutes, hours, or days). Custom reminders range from 1 minute to 40320 minutes (28 days). They are stored as `reminder_offset = 'custom'` with the length in `reminder_minutes`. The migration `supabase/migrations/20261026000000_custom_reminder.sql` adds the column and constraints and updates the `sync_task_reminder` trigger. It must be applied with `supabase db push`.
+A task reminder can be set to **Custom…**, followed by a number and a unit (minutes, hours, or days). Custom reminders range from 1 minute to 40320 minutes (28 days). They are stored as `reminder_offset = 'custom'` with the length in `reminder_minutes`. The migration `supabase/migrations/20261026000000_phase7_custom_reminder.sql` adds the column and constraints and updates the `sync_task_reminder` trigger. It must be applied with `supabase db push`.
 
 ## Add-task composer and day schedule
 
