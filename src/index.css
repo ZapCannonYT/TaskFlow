@@ -154,6 +154,7 @@ button:disabled { cursor: default; }
 .removed-empty { color: var(--muted); font-size: 13px; }
 .toast { position: fixed; z-index: 5; left: 50%; bottom: 26px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; min-height: 54px; max-width: min(94vw, 620px); padding: 5px 8px 5px 16px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); font-size: 14px; }
 .toast span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.toast button { flex: 0 0 auto; white-space: nowrap; }
 .toast.toast-closing { pointer-events: none; }
 .toast button { min-height: 44px; padding: 0 12px; border: 0; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .mobile-tabs { display: none; }
@@ -258,6 +259,9 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
   .mobile-tabs button { min-width: 0; min-height: 52px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 500; }
   .mobile-tabs button.active { color: var(--accent); }
   .toast { bottom: calc(var(--tabs-h) + var(--composer-h) + 16px + env(safe-area-inset-bottom)); }
+  .toast-compact { width: max-content; max-width: calc(100vw - 24px); flex-wrap: nowrap; gap: 6px; padding-left: 10px; font-size: 13px; }
+  .toast-compact span { white-space: nowrap; overflow-wrap: normal; }
+  .toast-compact button { min-height: 40px; padding: 0 8px; font-size: 12px; }
   body:has(.composer input:focus) .mobile-tabs { display: none; }
 }
 
@@ -326,6 +330,8 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
 .one-thing-card { animation: card-enter var(--dur) var(--ease-out) both; }
 @keyframes options-enter { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 .composer-options { animation: options-enter 120ms var(--ease-out) both; }
+.composer-more { display: inline-flex; align-items: center; gap: 5px; min-height: 36px; margin-top: 4px; padding: 0 6px; color: var(--muted); }
+.select-chip > svg { flex: 0 0 auto; color: var(--muted); }
 .select-chip input[type="time"] { max-width: 92px; border: 0; background: transparent; color: inherit; font-size: 13px; }
 .voice-button { position: relative; }
 .voice-button.listening::after { content: ''; position: absolute; inset: 0; border: 2px solid var(--accent); border-radius: inherit; pointer-events: none; animation: voice-pulse 1.2s ease-out infinite; }

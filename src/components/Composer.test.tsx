@@ -56,6 +56,18 @@ describe('Composer', () => {
     expect(input).toHaveFocus()
   })
 
+  it('reveals task details in layers and offers a one-hour reminder', async () => {
+    const user = userEvent.setup()
+    render(<Composer {...props}/> )
+    await user.type(screen.getByRole('textbox', { name: 'Add a task' }), 'Plan the trip')
+    expect(screen.queryByRole('combobox', { name: 'Reminder' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'More details' }))
+    expect(screen.getByRole('combobox', { name: 'Reminder' })).toHaveValue('1_hour_before')
+    await user.click(screen.getByRole('button', { name: 'More options' }))
+    expect(screen.getByRole('combobox', { name: 'Repeat' })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Description' })).toBeInTheDocument()
+  })
+
   it('does not autofocus the title field on initial render', () => {
     render(<Composer {...props}/> )
     expect(screen.getByRole('textbox', { name: 'Add a task' })).not.toHaveFocus()

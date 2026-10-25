@@ -5,8 +5,9 @@ type AuditFields = Pick<Task, 'due_at' | 'due_is_approx' | 'size' | 'is_importan
 
 export function isBasicTask(task: AuditFields) {
   const setFields = Number(Boolean(task.due_at && !task.due_is_approx)) + Number(Boolean(task.size)) + Number(task.is_important) + Number(Boolean(task.label_id))
-    + Number(Boolean(task.recurrence_rule)) + Number(Boolean(task.description?.trim())) + Number(Boolean(task.reminder_offset && task.reminder_offset !== 'none'))
-  return setFields < 5
+    + Number(Boolean(task.recurrence_rule)) + Number(Boolean(task.description?.trim()))
+    + Number(Boolean(task.due_at && !task.due_is_approx && task.reminder_offset && task.reminder_offset !== 'none'))
+  return setFields <= 3
 }
 
 export function needsDetailsPrompt(task: AuditFields & Pick<Task, 'status' | 'deleted_at'>) {
