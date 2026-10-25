@@ -76,9 +76,10 @@ export function transcribeSegment(audio: Float32Array, sampleRate: number, prior
 }
 export function cancelAllTranscriptions() {
   rejectAll('cancelled'); worker?.terminate(); worker = null
-  publish({ state: 'idle', progress: undefined }); startVoicePreload()
+  publish({ state: 'idle', progress: undefined })
 }
 if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && (!worker || status.state === 'error')) { worker = null; publish({ state: 'idle' }); startVoicePreload() }
+  // The on-device model is only a fallback now, so reload it lazily on next use instead of eagerly.
+  if (document.visibilityState === 'visible' && status.state === 'error') { worker = null; publish({ state: 'idle', error: undefined }) }
 })
 if (import.meta.env.DEV && typeof window !== 'undefined') (window as VoiceWindow).__voiceStatus = getVoiceStatus

@@ -37,8 +37,9 @@ describe('singleton voice worker', () => {
     voice.cancelAllTranscriptions()
     await expect(cancelled).rejects.toThrow('cancelled')
     expect(worker.terminated).toBe(true)
-    expect(MockWorker.instances).toHaveLength(2)
-    expect(MockWorker.instances[1].sent[0].message).toEqual({ type: 'preload' })
+    // The on-device model is a fallback, so cancelling does not eagerly reload it.
+    expect(MockWorker.instances).toHaveLength(1)
+    expect(voice.getVoiceStatus().state).toBe('idle')
   })
 
   it('gives final work priority and replaces queued drafts', async () => {
@@ -77,6 +78,9 @@ describe('singleton voice worker', () => {
     expect(voice.getVoiceStatus()).toMatchObject({ state: 'error', error: 'worker crashed' })
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
     document.dispatchEvent(new Event('visibilitychange'))
+    expect(voice.getVoiceStatus().state).toBe('idle')
+    expect(MockWorker.instances).toHaveLength(1)
+    voice.startVoicePreload()
     expect(MockWorker.instances).toHaveLength(2)
     expect(MockWorker.instances[1].sent[0].message).toEqual({ type: 'preload' })
   })

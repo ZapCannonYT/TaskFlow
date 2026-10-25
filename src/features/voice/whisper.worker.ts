@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import { env, pipeline } from '@huggingface/transformers'
 import { resampleForWhisper } from './audio'
-import { detectDevice, fallbackChain, pickVoiceModel, type VoiceModelConfig } from './models'
+import { fallbackChain, pickVoiceModel, type VoiceModelConfig } from './models'
 
 const scope = self as DedicatedWorkerGlobalScope
 type Transcriber = Awaited<ReturnType<typeof pipeline>>
@@ -86,8 +86,7 @@ async function loadModel(config: VoiceModelConfig) {
 
 async function loadTranscriber() {
   const loadStarted = performance.now()
-  const device = await detectDevice()
-  const first = pickVoiceModel(device)
+  const first = pickVoiceModel()
   let lastError: unknown
 
   for (const [index, config] of fallbackChain(first).entries()) {

@@ -12,7 +12,7 @@ Three rules decide almost every design choice below:
 
 1. **Capture now, organize later.** Only the title is required.
 2. **Fix after, never ask before.** Undo toasts instead of "Are you sure?" dialogs.
-3. **Add machinery only when a real need appears.** No extra servers, no AI APIs, no integrations in the first versions.
+3. **Add machinery only when a real need appears.** No extra servers, no AI APIs (voice transcription is the one exception, see Section 5), no integrations in the first versions.
 4. **Companion, not nag.** Few notifications, mostly silent, never switched off for being ignored.
 
 ---
@@ -24,15 +24,16 @@ Three rules decide almost every design choice below:
 │  Android phone (PWA)                      Windows laptop (PWA)      │
 │                                                                      │
 │  ┌──────────────────────────── React app ────────────────────────┐  │
-│  │  UI screens:  Today · Inbox · Later · Done · Quick details    │  │
-│  │  Capture:     [ Add a task…            🎤 ]                   │  │
+│  │  UI screens:  Today · Inbox · This week · Done · Quick details│  │
+│  │  Capture:     [ Add a task…            mic ]                  │  │
 │  │                         │                │                    │  │
 │  │                    typed text      audio from mic             │  │
 │  │                         │                │                    │  │
 │  │                         │       ┌────────▼─────────┐          │  │
-│  │                         │       │ Web Worker       │          │  │
-│  │                         │       │ Whisper (on-     │          │  │
-│  │                         │       │ device, offline) │          │  │
+│  │                         │       │ Cloud STT        │          │  │
+│  │                         │       │ /api/transcribe  │          │  │
+│  │                         │       │ Fallback: on-    │          │  │
+│  │                         │       │ device Moonshine │          │  │
 │  │                         │       └────────┬─────────┘          │  │
 │  │                         └────────┬───────┘ text               │  │
 │  │                                  ▼                            │  │
@@ -72,8 +73,8 @@ If you think in networking terms: the app is the client, Supabase is the server 
 - **State**: keep it simple. Components read tasks from Supabase and subscribe to changes; no Redux.
 - **Service worker**: a small background script. It exists mainly for push notifications and for caching the app shell. It is the only thing that can react when the app is closed.
 
-### 3.2 Voice: on-device speech-to-text
-See Section 5 for the full flow.
+### 3.2 Voice: cloud speech-to-text with an on-device fallback
+See Section 5 for the full flow. The main path is a Cloudflare Worker endpoint (`POST /api/transcribe`) running Workers AI Whisper; the on-device Moonshine model is the fallback.
 
 ### 3.3 Backend: Supabase (managed Postgres plus extras)
 - **Postgres** is the single source of truth. Phone and laptop never talk to each other; both talk to the database.
@@ -84,6 +85,11 @@ See Section 5 for the full flow.
 ### 3.4 Scheduling and delivery
 - **Cron** wakes an **Edge Function** (a small serverless function) on a schedule.
 - The function sends **Web Push** using VAPID keys (a keypair identifying your server to the push services). The private key stays server-side only.
+
+### 3.5 Edge: Cloudflare Worker
+- The app is deployed as a Cloudflare Worker that serves the static build and the `POST /api/transcribe` endpoint (`src/cloudflare-worker.ts`).
+- The Worker holds an `AI` binding for Workers AI and only public values (`SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`) under `vars` in `wrangler.jsonc`.
+- Before running any model, it verifies the caller's Supabase login token through Supabase Auth. No private key lives in the Worker.
 
 ---
 
@@ -103,30 +109,34 @@ Why these choices:
 - **`kind`** tells the dispatcher which copy, sound, and budget rules apply (a silent `details_prompt` is treated very differently from a normal `daily` nudge).
 - **`size`, `is_important`, `label_id`** are plain columns, not stored scores. The ranking is computed fresh each time from these and the due date, so changing a task instantly changes what gets recommended.
 - **`delivered_via`** records which channel actually delivered a reminder, so the same reminder is never shown twice (once by push, once in the app).
+- **Custom reminder offsets** let a task reminder be set to "Custom…" with a number and a unit (minutes, hours, or days). The choice is stored as `reminder_offset = 'custom'` with the length in `reminder_minutes` (1 to 40320, that is 28 days). Migration `supabase/migrations/20261026000000_phase7_custom_reminder.sql` adds the column and constraints and updates the `sync_task_reminder` trigger. It must be applied with `supabase db push`.
 
 Every table has RLS on. Secrets (service-role key, VAPID private key) live only in Edge Function environment variables, never in `VITE_` variables.
 
 ---
 
-## 5. Voice capture (speech-to-text only)
+## 5. Voice capture (speech-to-text)
 
-### 5.1 Why on-device and open source
-- You asked for open-source solutions. **OpenAI Whisper** is an open-source speech model, and **Transformers.js** (`@huggingface/transformers`) runs it inside the browser via WebGPU (fast, needs a capable device) or WebAssembly (slower, works almost everywhere).
-- Audio never leaves your device. No API key, no per-use cost, no server to maintain.
-- The browser's built-in Web Speech API is **not** used as the main path: it is not open source and can send audio to a third-party server.
+### 5.1 Cloud first, on-device fallback
+- **Main path: cloud.** The Worker endpoint `POST /api/transcribe` runs the open-source **OpenAI Whisper** model `@cf/openai/whisper-large-v3-turbo` on Workers AI, called through the `AI` binding declared in `wrangler.jsonc` (`"ai": { "binding": "AI" }`). Workers AI has a free daily allowance on Cloudflare's Workers plan, so there is no per-use cost within that allowance.
+- **Fallback: on-device.** The existing on-device **Moonshine** model handles transcription only when the endpoint is unavailable (for example under plain `npm run dev`, which has no Worker) or fails. It loads lazily when it is needed, not at startup.
+- **Privacy.** On the cloud path, audio is sent to Cloudflare for transcription. On the fallback path, audio stays on the device.
+- The browser's built-in Web Speech API is still **not** used: it is not open source and can send audio to a third-party server.
 
 ### 5.2 Step-by-step flow
-1. User taps 🎤 in the quick-add field (first time only: the browser asks for mic permission).
-2. The app records audio and watches for silence (voice activity detection).
-3. When you stop talking, recording ends automatically.
-4. The audio is converted to **mono, 16 kHz** samples (what Whisper expects) and sent to a **Web Worker**, a background thread, so the screen never freezes.
-5. The worker runs Whisper and returns text.
-6. The text is saved as a title-only task in Inbox.
-7. A toast shows `Added "buy USB-C cable"` with **Undo** and **Edit**.
+1. User taps the mic button in the quick-add field (first time only: the browser asks for mic permission).
+2. The app records the whole utterance, using voice activity detection to end it after about 2 seconds of silence, or at 60 seconds at most.
+3. The recording is encoded as **mono, 16 kHz WAV** (`src/features/voice/cloudTranscribe.ts`), the format Whisper expects.
+4. The app sends the WAV to `POST /api/transcribe` with the user's Supabase access token as `Authorization: Bearer ...`. Requests over about 2.2 MB are rejected.
+5. The Worker (`src/cloudflare-worker.ts`) verifies the token by calling `{SUPABASE_URL}/auth/v1/user` with the publishable key, then runs Whisper through the `AI` binding and returns the text.
+6. If the request fails or the endpoint is unavailable, the app transcribes on the device with Moonshine instead. That runs in a **Web Worker**, a background thread, so the screen never freezes.
+7. The text is saved as a title-only task in Inbox.
+8. A toast shows `Added "buy USB-C cable"` with **Undo** and **Edit**.
 
 Mistakes are expected (accents, noise), so correction is cheap: Undo or Edit, no dialogs.
 
-### 5.3 Sketch of the worker (for understanding, not final code)
+### 5.3 Original on-device sketch (background only)
+The shipped fallback uses Moonshine rather than the Whisper setup below. The sketch is kept only as background on the original design.
 
 ```ts
 // worker.ts
@@ -149,9 +159,12 @@ self.onmessage = async (e) => {
 Check the exact model names and API in the current Transformers.js docs when implementing; model IDs and options change.
 
 ### 5.4 Known limits
-- **First use** downloads the model (tiny is around 39 MB, base around 74 MB) and caches it in the browser. Show "Getting voice ready…" once, and keep typing fully usable meanwhile.
-- **Speed on your phone** is unknown until measured. If base is too slow on WASM, fall back to tiny.
-- **Language**: the `.en` models are English-only. If you want Hindi or mixed speech later, switch to a multilingual Whisper model (larger, slower).
+- **Connection and sign-in**: the cloud path needs a connection and a valid Supabase login token. Requests over about 2.2 MB are rejected; the 60-second cap keeps recordings below that size.
+- **Quota**: cloud calls count against the Workers AI free daily allowance. If a request fails for any reason, including an exhausted allowance, the fallback is used.
+- **Local testing**: plain `npm run dev` has no Worker. Use `npm run build` then `npx wrangler dev` (requires `npx wrangler login`). Workers AI bindings always call Cloudflare remotely and count against the allowance.
+- **Fallback first use** downloads the Moonshine model the first time it is needed. Keep typing fully usable meanwhile.
+- **Speed of the fallback** on your phone is unknown until measured.
+- **Language**: Whisper large-v3-turbo is multilingual, so the cloud path covers more languages than the fallback. The fallback covers whatever the Moonshine model in use supports.
 - **Always works fallback**: the Android keyboard's own mic button. Taskflow does not need to do anything for this to work.
 
 ### 5.5 "Add by voice" from the home screen
@@ -169,7 +182,7 @@ Two kinds of notification exist: **reminders you set** on a task (due-time alert
 |---|---|---|---|
 | Daily nudge | Once a day, default 6:30 PM (you can change it) | Normal | 1 per day; skipped if nothing to surface |
 | Urgent re-ping | About 3 hours later, never after 10:15 PM | Silent | 1 per day; only if the task is due today/missed and the nudge was not tapped |
-| Details prompt | 1 hour after a basic task is added | Silent | Batched; max 2 per day |
+| Inbox digest | One hour after the newest Inbox capture | Silent | At most 1 per day; skipped if Inbox is clear |
 | Your own reminders | Whatever you set | Normal | As configured |
 | Weekly summary | Sunday evening | Normal | Replaces that day's daily nudge |
 
@@ -208,12 +221,13 @@ Buttons on the nudge: **Done**, **Later**, **Skip today**.
 ### 6.6 Ignored nudges
 The companion **never turns itself off**. Ignoring today changes nothing about tomorrow. The one re-ping is the only repeat, and it only exists for urgent tasks.
 
-### 6.7 The details prompt (audit of basic tasks)
+### 6.7 The Inbox digest (audit of basic tasks)
 - Every task has four optional fields: When, Size, Important, Label.
 - **Basic** = 0 to 2 of them set. **Complete** = 3 or more.
-- On creating a basic task, a `details_prompt` reminder is scheduled one hour out. It is cancelled if the task becomes complete, is completed, or is removed.
-- It arrives silently (and as a card on Today), is batched if several tasks qualify, and opens **Quick details**: one task at a time with tap chips and a Skip button.
-- Complete tasks are never prompted, so people who fill in details are never nagged.
+- Each new Inbox capture schedules one `details_prompt` reminder, flagged as the digest, one hour out. A later capture pushes that same reminder back to an hour after the newest capture. The dedupe key `inbox-digest:<user>:<local day>` allows at most one digest per user per day. Migration `supabase/migrations/20261028000000_phase9_inbox_digest.sql` also cancels the old per-task prompts.
+- The Edge Function `companion-dispatch` builds the text at send time: "N tasks in Inbox" with the first two titles. It skips the digest if Inbox is clear.
+- The digest is silent. Tapping it opens the app at `/?open=inbox`, where each task can be opened in **Quick details**: one task at a time with tap chips and a Skip button.
+- Tasks that are complete, or have left Inbox, are never counted, so people who fill in details are never nagged.
 
 ### 6.8 Permission, the polite way
 Browsers make a denied permission hard to undo, so Taskflow asks twice: first its own one-line card after your first saved task ("Want a daily nudge so nothing slips?" Yes / Not now). Only **Yes** shows the real browser prompt. "Not now" re-offers once after about 3 days.
@@ -262,19 +276,26 @@ Steps: scaffold with Vite, install shadcn/ui, build the Inbox from a minimal-lis
 Rule of thumb: if a friend would need to ask what a word means, replace it.
 
 ### 7.4 Screens
-- **Today / Inbox / Later / Done**: four plain tabs, same row design in each.
-- **Add field + chips**: top on laptop, bottom on phone, mic inside the field (Phase 4). While you type, one slim row of chips appears: **When**, **Size**, a **star**, **Label**. Tapping is optional; Enter always saves.
+- **Today / Inbox / This week / Done**: four plain tabs, same row design in each.
+- **Add field + chips (composer)**: top on laptop, bottom on phone, mic inside the field (Phase 4). The first row shows only **When**, **Size**, and **Time**. Once any of them is set, a second row appears with **Reminder**, **Label**, **Repeat**, **Important**, and an **Add note** button for the description. Tapping is optional; Enter always saves.
 - **Today**:
-  - phone: one column. A big **"one thing"** card on top (the ranking function's pick, with Done / Later), a 7-day strip, then the day's list. A **This week** option groups the week by day.
+  - phone: one column. A big **"one thing"** card on top (the ranking function's pick, with Done / Later), a 7-day strip, then the day's list.
   - laptop: two panes, **Today** on the left and **This week** on the right.
+- **This week**: a rolling seven days starting today, matching the day strip. Tasks are grouped by day, and the view ends with a **Later** group for everything due after those seven days.
+- **Day schedule**: the time axis stretches where a task needs more room than its duration gives it, so titles are not clipped. Side-by-side columns are capped at 2 on narrow screens and 3 on wide ones, and crowded tasks show only the first few words of the title. Layout logic is `layoutDay` in `src/features/today/dayLayout.ts`.
 - **Why this layout?** Todoist's phone apps use a strip of days you swipe through and don't offer columns in Upcoming; Singularity's phone default is a one-week row of day tabs. Columns are cramped on a phone, so the phone gets one column plus a day strip, and the laptop has room for two panes.
 - **Task row**: checkbox, title, small chips only for fields that are set. Tap a row to reveal inline details. No modals.
-- **Quick details** (the audit, only for basic tasks): one task per screen, chips for When / Size / Important / Label / Repeat, plus **Skip** and **Done**. Repeat is optional, defaults to Never, and offers daily / weekdays / weekly / monthly. Completing a repeating task closes this occurrence and creates its next dated occurrence; it is never required to save or review a task. Reached from the Today card or the details prompt.
+- **Quick details** (the audit, only for basic tasks): one task per screen, chips for When / Size / Important / Label / Repeat, plus **Skip** and **Done**. Repeat is optional, defaults to Never, and offers daily / weekdays / weekly / monthly. Completing a repeating task closes this occurrence and creates its next dated occurrence; it is never required to save or review a task. Reached from the Today card or from an Inbox task.
 
 ### 7.5 A quick usability test you can run yourself
 1. Hand your phone to a friend with the app open; say "add: buy milk." Time it. Target: a few seconds, no hesitation.
-2. Add a title-only task and wait an hour. Does the silent "Add details?" prompt make sense, and can they finish Quick details in a few taps?
+2. Add a title-only task and wait an hour. Does the silent Inbox digest make sense when tapped, and can they finish Quick details in a few taps?
 3. Wherever they hesitate, rename or remove something. Repeat.
+
+### 7.6 Motion setting
+- Settings has a **Motion** option: **Full animations** (the default), **Reduced**, or **Follow system**.
+- The choice is stored per device in `localStorage` under `taskflow:motion` (`src/lib/motion.ts`) and applied as `data-motion` on the `html` element.
+- Reason: on Windows with "Animation effects" turned off, Chrome, Edge, and Helium report `prefers-reduced-motion`. Before this setting, that flag disabled every animation on PC. Because Full animations is the default, the system flag no longer does that unless a user picks Reduced or Follow system.
 
 ---
 
@@ -283,7 +304,7 @@ Rule of thumb: if a friend would need to ask what a word means, replace it.
 - Writes go to Postgres; Realtime updates other devices; the app also refetches when it regains focus or reconnects.
 - Version 1 requires a connection to save, and says so clearly rather than silently failing. A failed save keeps your typed or spoken text.
 - Offline capture (queue in IndexedDB, retry later) comes later, only after conflict rules are designed.
-- Voice transcription itself works offline once the model is cached; saving still needs a connection.
+- Voice transcription uses the cloud endpoint when it is reachable. When it is not, the on-device Moonshine model transcribes instead, and that works offline once the model is cached. Saving still needs a connection.
 
 ---
 
@@ -291,6 +312,7 @@ Rule of thumb: if a friend would need to ask what a word means, replace it.
 - RLS on every user table; test that user A cannot touch user B's rows.
 - No privileged keys in client code.
 - `task-action` verifies the login token and task ownership on every call.
+- `/api/transcribe` verifies the Supabase login token through Supabase Auth before it runs the model. The Worker holds only public values.
 - Validate input at the database (title trimmed and non-empty).
 - Offer data export before relying on the app as your only task store.
 
@@ -305,11 +327,13 @@ taskflow/
 │  ├─ components/ui/       # shadcn/ui components
 │  ├─ features/
 │  │  ├─ tasks/            # queries, mutations, realtime subscription
-│  │  ├─ voice/            # recorder, silence detection, worker.ts, useVoiceCapture
+│  │  ├─ voice/            # recorder, silence detection, cloudTranscribe.ts, on-device fallback worker, useVoiceCapture
 │  │  ├─ reminders/        # defaults, preset labels, permission card
 │  │  ├─ companion/        # rankTasks(), nudge copy, basic-task check
 │  │  └─ quick-details/    # one-task-at-a-time detail chips
+│  ├─ lib/motion.ts        # motion preference: Full, Reduced, or Follow system
 │  ├─ lib/supabase.ts
+│  ├─ cloudflare-worker.ts # POST /api/transcribe (Workers AI Whisper)
 │  ├─ sw.ts                # service worker (push, notification actions)
 │  └─ main.tsx
 ├─ supabase/
@@ -327,7 +351,7 @@ taskflow/
 1. **Phase 1, Base:** tasks, login, RLS, one-field add with tap chips, Inbox / Today / Later / Done, sync. Size, Important, and Label columns exist from day one.
 2. **Phase 2, Installable app and views:** PWA, one-thing card, 7-day strip, This week, two-pane laptop layout.
 3. **Phase 3, Reminders and companion:** push pipeline, explicit reminders, ranking function, daily nudge and re-ping, permission flow, Sunday summary.
-4. **Phase 4, Voice capture:** on-device Whisper, mic button, Undo/Edit toast, "Add by voice" shortcut.
+4. **Phase 4, Voice capture:** mic button, Undo/Edit toast, "Add by voice" shortcut, on-device speech model. Cloud-first transcription was added later (see Section 5).
 5. **Phase 5, Quick details:** basic-task detection, one-hour details prompt, Quick details screen, wording pass.
 6. **Phase 6, Extras:** widget, share target, offline writes, integrations (only if they earn their keep).
 
@@ -336,19 +360,19 @@ taskflow/
 ## 12. Decisions and open questions
 
 **Decided**
-- Speech-to-text only; on-device open-source Whisper via Transformers.js.
+- Speech-to-text only. Cloud transcription (Workers AI Whisper) comes first, with an on-device Moonshine fallback that loads only when needed.
 - Voice tasks auto-save with an Undo/Edit toast (fix after, never ask before).
 - Companion is a quiet helper: direct wording, no mascot, no streaks or scores.
 - One daily nudge (default 6:30 PM, editable) plus one silent re-ping only for urgent tasks; it never turns itself off.
 - Ranking is a readable formula over due date, Important, and Size. No vectors, no AI.
 - Four optional tap fields (When, Size, Important, Label). 0 to 2 set means basic; 3 or more means complete.
-- Basic tasks get one silent details prompt an hour after creation; complete tasks never do.
+- Each new Inbox capture schedules one silent Inbox digest an hour later, at most one per user per day; it is skipped when Inbox is clear.
 - Phone: one column with a day strip. Laptop: Today and This week side by side.
 - Phase order: base, installable app and views, reminders and companion, voice, quick details, extras.
 
 **To verify on your devices**
-- Does Whisper base run fast enough on your Android phone (WebGPU or WASM)? If not, use tiny.
+- Does the on-device fallback run fast enough on your Android phone? Check how often it is used in practice.
 - Does the "Add by voice" shortcut start the mic without an extra tap?
 - Do background push notifications, including the silent ones, behave as expected with your phone's battery settings?
 - Is the default scoring table right for how you actually work? Tune the constants after a week of real use.
-- English-only voice models enough, or do you want multilingual?
+- Is cloud transcription accurate enough for your speech, and is the Workers AI daily allowance enough for regular use?

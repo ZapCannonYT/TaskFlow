@@ -71,3 +71,34 @@ export function rankOneThing<T extends {
     return new Date(first.created_at).getTime() - new Date(second.created_at).getTime()
   })
 }
+
+export function localDateInput(value: string | null) {
+  if (!value) return ''
+  const date = new Date(value)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+export function localTimeInput(value: string | null) {
+  if (!value) return ''
+  const date = new Date(value)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+const time12 = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+
+/** `HH:MM` or an ISO timestamp, shown as e.g. "5:30 PM" regardless of the browser's 24-hour preference. */
+export function formatTime12(value: string | Date | null) {
+  if (!value) return ''
+  if (typeof value === 'string' && /^\d{1,2}:\d{2}$/.test(value)) {
+    const [hours, minutes] = value.split(':').map(Number)
+    return time12.format(new Date(2000, 0, 1, hours, minutes))
+  }
+  return time12.format(new Date(value))
+}
+
+export function withLocalTime(value: string | null, time: string, fallback?: Date) {
+  const date = value ? new Date(value) : new Date((fallback ?? new Date(dateForChoice('today').due_at!)).getTime())
+  const [hours, minutes] = time.split(':').map(Number)
+  date.setHours(hours, minutes, 0, 0)
+  return date.toISOString()
+}

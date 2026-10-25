@@ -1,5 +1,50 @@
 interface Env {
   ASSETS: { fetch(request: Request): Promise<Response> }
+  AI?: { run(model: string, input: Record<string, unknown>): Promise<{ text?: string }> }
+  SUPABASE_URL?: string
+  SUPABASE_PUBLISHABLE_KEY?: string
+}
+
+const TRANSCRIBE_PATH = '/api/transcribe'
+const TRANSCRIBE_MODEL = '@cf/openai/whisper-large-v3-turbo'
+// 16 kHz mono 16-bit WAV is 32 KB/s, so this allows a little over a minute of speech.
+const MAX_AUDIO_BYTES = 2_200_000
+const TRANSCRIBE_PROMPT = 'A short to-do item, for example: Call the bank tomorrow at 5 pm.'
+
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } })
+
+function toBase64(bytes: Uint8Array) {
+  let binary = ''
+  for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000))
+  return btoa(binary)
+}
+
+async function isSignedIn(request: Request, env: Env) {
+  const authorization = request.headers.get('authorization')
+  if (!authorization?.startsWith('Bearer ') || !env.SUPABASE_URL || !env.SUPABASE_PUBLISHABLE_KEY) return false
+  try {
+    const response = await fetch(new URL('/auth/v1/user', env.SUPABASE_URL), { headers: { authorization, apikey: env.SUPABASE_PUBLISHABLE_KEY } })
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+async function transcribe(request: Request, env: Env) {
+  if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
+  if (!env.AI) return json({ error: 'Cloud transcription is not configured.' }, 503)
+  if (!await isSignedIn(request, env)) return json({ error: 'Sign in again to use voice capture.' }, 401)
+  const declared = Number(request.headers.get('content-length') ?? 0)
+  if (declared > MAX_AUDIO_BYTES) return json({ error: 'Recording is too long.' }, 413)
+  const audio = new Uint8Array(await request.arrayBuffer())
+  if (!audio.length) return json({ error: 'No audio received.' }, 400)
+  if (audio.length > MAX_AUDIO_BYTES) return json({ error: 'Recording is too long.' }, 413)
+  try {
+    const result = await env.AI.run(TRANSCRIBE_MODEL, { audio: toBase64(audio), language: 'en', vad_filter: true, initial_prompt: TRANSCRIBE_PROMPT })
+    return json({ text: (result.text ?? '').trim() })
+  } catch (cause) {
+    return json({ error: cause instanceof Error ? cause.message : 'Transcription failed.' }, 502)
+  }
 }
 
 interface WorkerContext {
@@ -75,7 +120,9 @@ async function fetchVoiceModel(request: Request, context: WorkerContext) {
 
 export default {
   async fetch(request: Request, env: Env, context: WorkerContext): Promise<Response> {
-    if (new URL(request.url).pathname.startsWith(MODEL_PATH)) {
+    const pathname = new URL(request.url).pathname
+    if (pathname === TRANSCRIBE_PATH) return transcribe(request, env)
+    if (pathname.startsWith(MODEL_PATH)) {
       return fetchVoiceModel(request, context)
     }
     return env.ASSETS.fetch(request)
