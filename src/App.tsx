@@ -6,7 +6,11 @@ import { isBasicTask, needsDetailsPrompt } from './lib/quickDetails'
 import { nextOccurrence } from './lib/recurrence'
 import { Composer, type ComposerHandle, type DraftDetails } from './components/Composer'
 import { TaskRow } from './components/TaskRow'
+import { DayGrid } from './components/DayGrid'
+import { DayTaskSheet } from './components/DayTaskSheet'
 import { useVisualViewport } from './lib/useVisualViewport'
+import { useNow } from './lib/useNow'
+import { splitDayTasks } from './features/today/dayLayout'
 
 type View = 'Today' | 'Inbox' | 'Later' | 'This week' | 'Done'
 const tabs: View[] = ['Today', 'Inbox', 'Later', 'This week', 'Done']
@@ -102,6 +106,7 @@ function App() {
   const [completingIds, setCompletingIds] = useState<ReadonlySet<string>>(() => new Set())
   const [settlingIds, setSettlingIds] = useState<readonly string[]>([])
   const [completedThisSession, setCompletedThisSession] = useState(0)
+  const [sheetTaskId, setSheetTaskId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [syncStatus, setSyncStatus] = useState(navigator.onLine ? 'Connecting' : 'Offline')
   const [isOnline, setIsOnline] = useState(navigator.onLine)
@@ -305,11 +310,19 @@ function App() {
   const weekTasks = useMemo(() => tasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && task.due_at && new Date(task.due_at) >= weekStart && new Date(task.due_at) < weekEnd), [tasks, weekStart, weekEnd])
   const selectedDayTasks = view === 'Today' ? visibleTasks : []
   const oneThing = view === 'Today' ? rankOneThing(selectedDayTasks)[0] : undefined
-  const remainingTodayTasks = oneThing ? selectedDayTasks.filter(task => task.id !== oneThing.id) : selectedDayTasks
+  const { timed: allTimed, anytime: allAnytime } = useMemo(() => splitDayTasks(selectedDayTasks), [selectedDayTasks])
   const missedTasks = useMemo(() => view === 'Today' && isSameLocalDay(selectedDay, new Date())
     ? tasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && isMissed(task))
     : [], [tasks, view, selectedDay])
-  const allClear = view === 'Today' && isSameLocalDay(selectedDay, new Date()) && selectedDayTasks.length === 0 && !oneThing && missedTasks.length === 0 && completedThisSession > 0
+  const missedIds = useMemo(() => new Set(missedTasks.map(task => task.id)), [missedTasks])
+  const timedTodayTasks = useMemo(() => allTimed.filter(task => !missedIds.has(task.id)), [allTimed, missedIds])
+  const anytimeTasks = useMemo(() => allAnytime.filter(task => task.id !== oneThing?.id && !missedIds.has(task.id)), [allAnytime, oneThing?.id, missedIds])
+  const viewingToday = isSameLocalDay(selectedDay, new Date())
+  const now = useNow(view === 'Today' && viewingToday)
+  const closeSheet = useCallback(() => setSheetTaskId(null), [])
+  const openDaySheet = useCallback((task: Task) => setSheetTaskId(task.id), [])
+  const sheetTask = sheetTaskId ? tasks.find(task => task.id === sheetTaskId && !task.deleted_at && task.status === 'open') : undefined
+  const allClear = view === 'Today' && viewingToday && timedTodayTasks.length === 0 && anytimeTasks.length === 0 && !oneThing && missedTasks.length === 0 && completedThisSession > 0
   const basicTasks = useMemo(() => tasks.filter(task => classifyView(task) === 'Inbox' && needsDetailsPrompt(task)), [tasks])
   const selectedQuickTask = quickDetailsTaskId ? tasks.find(task => task.id === quickDetailsTaskId && needsDetailsPrompt(task)) : undefined
   useEffect(() => { setQuickDescription(selectedQuickTask?.description ?? '') }, [selectedQuickTask?.id])
@@ -810,7 +823,17 @@ function App() {
               <div className="chip-row"><label className="choice-chip date-chip"><CalendarDays size={14}/><span>When</span><input aria-label="When" type="date" value={localDateInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { due_at: e.target.value ? new Date(`${e.target.value}T12:00:00`).toISOString() : null, due_is_approx: false, recurrence_rule: e.target.value ? selectedQuickTask.recurrence_rule : null })}/></label><label className="select-chip"><span>Due time</span><input aria-label="Due time" type="time" value={selectedQuickTask.is_all_day ? "" : localTimeInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { ...(e.target.value ? { due_at: withLocalTime(selectedQuickTask.due_at, e.target.value) } : {}), due_is_approx: false, is_all_day: !e.target.value })}/></label><label className="select-chip"><span>Repeat</span><select aria-label="Repeat" value={selectedQuickTask.recurrence_rule ?? ""} onChange={e => setQuickTaskRepeat(e.target.value)}><option value="">Never</option><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label><label className="select-chip"><span>Reminder</span><select aria-label="Reminder" disabled={!isOnline || !selectedQuickTask.due_at || selectedQuickTask.due_is_approx} value={selectedQuickTask.reminder_offset} onChange={e => void updateTask(selectedQuickTask, { reminder_offset: e.target.value as Task["reminder_offset"] })}><option value="none">None</option><option value="at_time">At due time</option><option value="1_day_before">1 day before</option><option value="2_days_before">2 days before</option></select></label><label className="select-chip"><span>Size</span><select aria-label="Size" value={selectedQuickTask.size ?? ''} onChange={e => void updateTask(selectedQuickTask, { size: (e.target.value || null) as Task['size'] })}><option value="">Not set</option><option value="quick">Quick</option><option value="hour">An hour</option><option value="big">Big</option></select></label><button className={`choice-chip ${selectedQuickTask.is_important ? 'starred' : ''}`} aria-pressed={selectedQuickTask.is_important} onClick={() => void updateTask(selectedQuickTask, { is_important: !selectedQuickTask.is_important })}><Star size={15}/>Important</button><label className="select-chip"><span>Label</span><select aria-label="Label" value={selectedQuickTask.label_id ?? ''} onChange={e => void updateTask(selectedQuickTask, { label_id: e.target.value || null })}><option value="">None</option>{labels.map(label => <option key={label.id} value={label.id}>{label.name}</option>)}</select></label></div><div className="quick-details-actions"><button className="text-button" onClick={() => void finishQuickDetails(true)}>Skip</button><button className="primary-button" onClick={() => void finishQuickDetails(false)}>Done</button></div></section>}
             <section className="day-pane"><div className="pane-heading"><div><p className="eyebrow">Selected day</p><h2>{isSameLocalDay(selectedDay, new Date()) ? 'Today' : todayLabel}</h2></div></div>
               {oneThing && <article key={oneThing.id} className={`one-thing-card ${completingIds.has(oneThing.id) ? 'task-completing' : ''} ${settleIndexById.has(oneThing.id) ? 'task-settling' : ''}`}><p className="eyebrow">One thing to start with</p><h3><span className="task-title-text">{oneThing.title}</span></h3><p className="one-thing-reason">{oneThing.is_important ? 'Important' : oneThing.size ? (oneThing.size === 'quick' ? 'Quick task' : oneThing.size === 'hour' ? 'About an hour' : 'A bigger task') : `Due ${isSameLocalDay(selectedDay, new Date()) ? 'today' : selectedDay.toLocaleDateString(undefined, { weekday: 'long' })}`}</p><div className="one-thing-actions"><button className="secondary-button accent-outline-button" disabled={!isOnline || completingIds.has(oneThing.id)} onClick={() => void completeTask(oneThing)}>Done</button><button className="secondary-button" disabled={!isOnline} onClick={() => void moveOneThingToTomorrow(oneThing)}>Tomorrow</button></div></article>}
-              {allClear ? <div className="all-clear" role="status"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M20 6 9 17l-5-5" transform="translate(-4 .5) scale(.85)"/></svg><p>All clear for today.</p></div> : renderTaskRows(remainingTodayTasks, `Other tasks for ${todayLabel}`, oneThing ? 'No other tasks for this day.' : 'Nothing is planned for this day.')}
+              {timedTodayTasks.length > 0 && <section className="schedule">
+                <h3 className="lane-heading">Schedule</h3>
+                <DayGrid timed={timedTodayTasks} now={viewingToday ? now : null} nextTaskId={oneThing?.id}
+                  completingIds={completingIds} settleIndexById={settleIndexById} isOnline={isOnline}
+                  onComplete={onRowComplete} onOpen={openDaySheet}/>
+              </section>}
+              {(anytimeTasks.length > 0 || timedTodayTasks.length === 0) && <section className="anytime">
+                {timedTodayTasks.length > 0 && <h3 className="lane-heading">Anytime</h3>}
+                {allClear ? <div className="all-clear" role="status"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M20 6 9 17l-5-5" transform="translate(-4 .5) scale(.85)"/></svg><p>All clear for today.</p></div>
+                  : renderTaskRows(anytimeTasks, `Anytime on ${todayLabel}`, oneThing || timedTodayTasks.length ? 'No other tasks for this day.' : 'Nothing is planned for this day.')}
+              </section>}
               {missedTasks.length > 0 && <section className="missed-list"><h3>Missed</h3>{renderTaskRows(missedTasks, 'Missed tasks')}</section>}
             </section>
             <aside className="week-pane"><div className="pane-heading"><div><p className="eyebrow">Coming up</p><h2>This week</h2></div><button className="text-button pane-link" onClick={() => chooseView('This week')}>Open week</button></div>{renderWeekAgenda(laterThisWeekTasks, selectedDay)}</aside>
@@ -824,6 +847,13 @@ function App() {
       </main>
     </div>
     {toast && <div className={`toast ${toastClosing ? 'toast-closing' : ''}`} role="status"><span>{toast.text}</span>{toast.action && <button onClick={() => { toast.action?.run(); setToast(null) }}>{toast.action.label}</button>}{toast.undo && <button disabled={!isOnline} onClick={() => { void toast.undo?.(); setToast(null) }}>Undo</button>}</div>}
+    {sheetTask && <DayTaskSheet onClose={closeSheet}>
+      <TaskRow task={sheetTask} labels={labels} listName="Today" isOnline={isOnline} expanded isNew={false}
+        isCompleting={false} isSettling={false} settleIndex={0}
+        onToggleExpand={() => closeSheet()}
+        onComplete={task => { closeSheet(); onRowComplete(task) }}
+        onUpdate={onRowUpdate} onRemove={task => { closeSheet(); onRowRemove(task) }}/>
+    </DayTaskSheet>}
     <nav className="mobile-tabs" aria-label="Task views">{tabs.map(tab => <button key={tab} className={view === tab ? 'active' : ''} aria-current={view === tab ? 'page' : undefined} onClick={() => chooseView(tab)}>{tab === 'Today' ? <Sun size={16}/> : tab === 'Inbox' ? <Inbox size={16}/> : tab === 'Later' ? <Clock size={16}/> : tab === 'This week' ? <CalendarRange size={16}/> : <CircleCheck size={16}/>} {tab}</button>)}</nav>
   </div>
 }
