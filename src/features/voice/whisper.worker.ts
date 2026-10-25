@@ -16,10 +16,14 @@ let transcriberWarmupMs = 0
 env.useBrowserCache = true
 // Ship the matching ONNX Runtime with the app so voice capture does not depend on
 // a third-party CDN being reachable from the browser.
-env.backends.onnx.wasm!.wasmPaths = {
-  mjs: new URL('/onnx-runtime/ort-wasm-simd-threaded.mjs', self.location.origin).href,
-  wasm: new URL('/onnx-runtime/ort-wasm-simd-threaded.wasm', self.location.origin).href,
+function setRuntimeWasmPaths(device: VoiceModelConfig['device']) {
+  const artifact = device === 'webgpu' ? 'ort-wasm-simd-threaded.jsep' : 'ort-wasm-simd-threaded'
+  env.backends.onnx.wasm!.wasmPaths = {
+    mjs: new URL(`/onnx-runtime/${artifact}.mjs`, self.location.origin).href,
+    wasm: new URL(`/onnx-runtime/${artifact}.wasm`, self.location.origin).href,
+  }
 }
+setRuntimeWasmPaths('wasm')
 const customModelHost = import.meta.env.VITE_VOICE_MODEL_HOST?.trim()
 if (customModelHost) {
   env.remoteHost = customModelHost.endsWith('/') ? customModelHost : `${customModelHost}/`
@@ -69,6 +73,7 @@ function voiceErrorMessage(error: unknown) {
 }
 
 async function loadModel(config: VoiceModelConfig) {
+  setRuntimeWasmPaths(config.device)
   const options = {
     device: config.device,
     ...(config.dtype ? { dtype: config.dtype as 'q8' | 'fp16' } : {}),

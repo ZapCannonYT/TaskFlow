@@ -3,7 +3,12 @@ import path from 'node:path'
 
 const runtimeDirectory = path.resolve('node_modules/onnxruntime-web/dist')
 const outputDirectory = path.resolve('dist/onnx-runtime')
-const runtimeFiles = ['ort-wasm-simd-threaded.mjs', 'ort-wasm-simd-threaded.wasm']
+const runtimeFiles = [
+  'ort-wasm-simd-threaded.mjs',
+  'ort-wasm-simd-threaded.wasm',
+  'ort-wasm-simd-threaded.jsep.mjs',
+  'ort-wasm-simd-threaded.jsep.wasm',
+]
 
 await mkdir(outputDirectory, { recursive: true })
 await Promise.all(runtimeFiles.map(file => copyFile(
@@ -15,4 +20,4 @@ const assetsDirectory = path.resolve('dist/assets')
 const generatedWasm = (await readdir(assetsDirectory)).filter(file => /^ort-wasm-.*\.wasm$/.test(file))
 await Promise.all(generatedWasm.map(file => rm(path.join(assetsDirectory, file))))
 
-console.log(`Packaged the matching ONNX Runtime files and removed ${generatedWasm.length} unused bundled WASM asset(s).`)
+console.log(`Packaged matching ONNX Runtime WASM and WebGPU files; removed ${generatedWasm.length} unused bundled WASM asset(s).`)
