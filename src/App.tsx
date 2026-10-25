@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { ArchiveRestore, CalendarDays, CalendarRange, Check, CircleCheck, Download, Inbox, Plus, RotateCcw, Star, Sun, X } from 'lucide-react'
+import { ArchiveRestore, CalendarDays, CalendarRange, Check, CircleCheck, Download, Inbox, Plus, RotateCcw, Star, Sun, Trash2, X } from 'lucide-react'
 import { isSupabaseConfigured, Label, PushSubscriptionRow, supabase, Task, UserPreferences } from './lib/supabase'
 import { addLocalDays, classifyView, dateForChoice, getSevenDays, isDueOnDay, isMissed, isSameLocalDay, localDateInput, localTimeInput, rankOneThing, startOfLocalDay, startOfLocalWeek, withLocalTime } from './lib/dates'
 import { isBasicTask, needsDetailsPrompt } from './lib/quickDetails'
@@ -755,6 +755,15 @@ function App() {
     setTasks(current => current.map(item => item.id === task.id ? { ...item, deleted_at: null, updated_at: restoredAt } : item))
   }
 
+  async function purgeTask(task: Task) {
+    if (!supabase || !isOnline) return
+    if (!window.confirm(`Permanently delete "${task.title}"? This cannot be undone.`)) return
+    const { error: deleteError } = await supabase.from('tasks').delete().eq('id', task.id)
+    if (deleteError) { setError(`Could not delete task · ${deleteError.message}`); return }
+    setTasks(current => current.filter(item => item.id !== task.id))
+    setToast({ text: 'Task deleted for good' })
+  }
+
   async function clearDeletedTasks() {
     if (!supabase || !isOnline || !deletedTasks.length || clearDeletedBusy) return
     if (!window.confirm(`Permanently delete all ${deletedTasks.length} recently deleted ${deletedTasks.length === 1 ? 'task' : 'tasks'}? This cannot be undone.`)) return
@@ -922,7 +931,7 @@ function App() {
           {view === 'Inbox' && basicTasks.length > 0 && <aside className="quick-details-prompt details-inbox-prompt"><span>{basicTasks.length} {basicTasks.length === 1 ? 'task could' : 'tasks could'} use more details.</span><button className="secondary-button" onClick={() => openTaskDetailsInInbox(basicTasks[0].id)}>Add details</button></aside>}
           {view === 'Inbox' && pinnedTask && !visibleTasks.some(task => task.id === pinnedTask.id) && <section className="pinned-edit" aria-label="Task from your schedule"><div className="pinned-edit-head"><h3>From your schedule</h3><button className="text-button" onClick={() => chooseView('Today')}>Back to Today</button></div>{renderTaskRows([pinnedTask], 'From your schedule')}</section>}
           {(view === 'Inbox' || view === 'Done') && renderTaskRows(visibleTasks, view)}
-          {view === 'Done' && <section className="removed-section"><div className="removed-heading"><h2><ArchiveRestore size={17}/>Recently removed</h2>{deletedTasks.length > 0 && <button className="secondary-button" disabled={!isOnline || clearDeletedBusy} onClick={() => void clearDeletedTasks()}>{clearDeletedBusy ? 'Clearing…' : 'Clear all'}</button>}</div>{deletedTasks.length ? deletedTasks.map(task => <div className="removed-row" key={task.id}><span>{task.title}</span><button className="secondary-button" disabled={!isOnline} onClick={() => void restoreTask(task)}><RotateCcw size={14}/>Restore</button></div>) : tasksLoaded ? <p className="removed-empty">Removed tasks can be restored here.</p> : <><span className="sr-only" role="status">Loading tasks</span><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/></>}</section>}
+          {view === 'Done' && <section className="removed-section"><div className="removed-heading"><h2><ArchiveRestore size={17}/>Recently removed</h2>{deletedTasks.length > 0 && <button className="secondary-button" disabled={!isOnline || clearDeletedBusy} onClick={() => void clearDeletedTasks()}>{clearDeletedBusy ? 'Clearing…' : 'Clear all'}</button>}</div>{deletedTasks.length ? deletedTasks.map(task => <div className="removed-row" key={task.id}><span>{task.title}</span><div className="removed-actions"><button className="secondary-button" disabled={!isOnline} onClick={() => void restoreTask(task)}><RotateCcw size={14}/>Restore</button><button className="icon-button remove-button" aria-label={`Delete ${task.title} for good`} title="Delete for good" disabled={!isOnline} onClick={() => void purgeTask(task)}><Trash2 size={16}/></button></div></div>) : tasksLoaded ? <p className="removed-empty">Removed tasks can be restored here.</p> : <><span className="sr-only" role="status">Loading tasks</span><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/></>}</section>}
           </div>
         </div>
       </main>

@@ -160,6 +160,7 @@ button:disabled { cursor: default; }
 .removed-section h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 15px; }
 .removed-row { min-height: 50px; display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
 .removed-empty { color: var(--muted); font-size: 13px; }
+.removed-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .toast { position: fixed; z-index: 5; left: 50%; bottom: 26px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; min-height: 54px; max-width: min(94vw, 620px); padding: 5px 8px 5px 16px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); font-size: 14px; }
 .toast span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
 .toast button { flex: 0 0 auto; white-space: nowrap; }
