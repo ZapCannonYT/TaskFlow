@@ -297,17 +297,23 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
   .composer-plus { display: none; }
   .composer-field input { min-height: 44px; }
   .composer-options {
-    display: flex;
-    gap: 6px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+    overflow: hidden;
+    padding: 4px 0 0;
+  }
+  .composer-options > .chip-row {
+    min-width: 0;
+    flex-wrap: nowrap;
+    gap: 4px;
     overflow-x: auto;
-    padding: 6px 0 0;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
   }
-  .composer-options::-webkit-scrollbar { display: none; }
-  .composer-options > .chip-row { flex: 0 0 auto; flex-wrap: nowrap; }
+  .composer-options > .chip-row::-webkit-scrollbar { display: none; }
   .composer-options .chip-group-label { display: none; }
-  .composer-options .choice-chip, .composer-options .select-chip { min-height: 32px; flex: 0 0 auto; padding: 0 10px; font-size: 13px; }
+  .composer-options .choice-chip, .composer-options .select-chip { min-height: 28px; flex: 0 0 auto; padding: 0 8px; font-size: 12px; }
   .composer-options .description-field, .composer-options .label-manager { display: none; }
   .mobile-tabs { padding: 2px 4px calc(2px + env(safe-area-inset-bottom)); }
   .mobile-tabs button { min-height: 48px; }

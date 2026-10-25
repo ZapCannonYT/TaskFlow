@@ -61,7 +61,7 @@ function isFetchFailure(error: unknown) {
 function voiceErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
   if (isFetchFailure(error)) {
-    return 'Could not download the on-device voice model. Check your connection and allow huggingface.co, then try the mic again.'
+    return 'Model download blocked. Allow huggingface.co and its hf.co file/CDN hosts, then retry.'
   }
   return message
 }
