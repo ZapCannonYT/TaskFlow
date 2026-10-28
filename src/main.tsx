@@ -3,8 +3,10 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import './index.css'
 import { applyMotion } from './lib/motion'
+import { installChipPickerClicks } from './lib/chipPicker'
 
 applyMotion()
+installChipPickerClicks()
 
 if (import.meta.env.DEV) void import('./features/voice/bench')
 
