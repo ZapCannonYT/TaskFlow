@@ -224,9 +224,6 @@ button:disabled { cursor: default; }
 .accent-outline-button { border-color: var(--accent); color: var(--accent); }
 .week-agenda { display: grid; gap: 17px; }
 .week-day-group h3 { margin: 0; padding: 0 0 5px; border-bottom: 1px solid var(--border); font-size: 14px; font-weight: 600; }
-.missed-list { margin-top: 20px; }
-.missed-list h3 { margin: 0; padding: 0 0 5px; border-bottom: 1px solid var(--border); color: var(--missed); font-size: 14px; font-weight: 600; }
-.missed-list .task-list { margin-top: 8px; }
 .week-day-group .task-list, .missed-list .task-list { margin-top: 4px; border-top: 0; }
 .week-day-group .empty-state { padding: 10px 4px; }
 .week-view { max-width: 850px; }
@@ -281,7 +278,7 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; }
   .day-strip { gap: 4px; margin: 8px 0 17px; }
   .day-strip-item { min-height: 67px; border-radius: 9px; font-size: 11px; }
   .day-strip-item strong { font-size: 16px; }
-  .mobile-tabs { position: fixed; z-index: 4; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: var(--surface); }
+  .mobile-tabs { position: fixed; z-index: 4; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: var(--surface); }
   .mobile-tabs button { min-width: 0; min-height: 52px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 500; }
   .mobile-tabs button.active { color: var(--accent); }
   .toast { bottom: calc(var(--tabs-h) + 16px + env(safe-area-inset-bottom)); }
@@ -523,3 +520,12 @@ button, .choice-chip, .select-chip, .nav-item { -webkit-tap-highlight-color: tra
 .wheel-item[aria-selected="true"] { color: var(--text); font-size: 19px; font-weight: 600; }
 .time-popover-foot { display: flex; justify-content: space-between; align-items: center; }
 .time-popover-foot .primary-button { min-height: 34px; padding: 0 16px; }
+
+/* Missed: a dismissible line on Today, and its own tab with quick ways to bring tasks back. */
+.missed-reminder { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 4px 4px 4px 12px; border: 1px solid color-mix(in srgb, var(--missed) 40%, var(--border)); border-radius: 10px; background: color-mix(in srgb, var(--missed) 7%, var(--surface)); color: var(--missed); font-size: 13px; animation: options-enter calc(160ms * var(--m)) var(--ease-out) both; }
+.missed-reminder span { flex: 1; min-width: 0; color: var(--text); }
+.missed-reminder .text-button { color: var(--missed); font-weight: 600; }
+.missed-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 13px; }
+.missed-row-actions { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.missed-row-actions .secondary-button { min-height: 34px; padding: 0 10px; }
+@media (max-width: 760px) { .missed-row-actions .secondary-button { padding: 0 8px; } }

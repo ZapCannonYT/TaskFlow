@@ -1,8 +1,8 @@
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { CalendarRange, Check, CircleCheck, Download, Inbox, Plus, Sun } from 'lucide-react'
+import { CalendarCheck, CalendarRange, CalendarX, Check, CircleCheck, Download, Inbox, Plus, Sun, X } from 'lucide-react'
 import { isSupabaseConfigured, Label, supabase, Task } from './lib/supabase'
-import { localDayKey, addLocalDays, classifyView, dateForChoice, getSevenDays, isDueOnDay, isMissed, isSameLocalDay, localDateInput, rankOneThing, startOfLocalDay } from './lib/dates'
+import { localDayKey, addLocalDays, classifyView, dateForChoice, getSevenDays, isDueOnDay, isMissed, isSameLocalDay, movedToToday, localDateInput, rankOneThing, startOfLocalDay } from './lib/dates'
 import { isBasicTask, needsDetailsPrompt } from './lib/quickDetails'
 import { isRecentDuplicate } from './lib/taskRules'
 import { rankCompanionTasks } from './lib/companion'
@@ -26,10 +26,11 @@ import { getMotionPref, motionScale, prefersReducedMotion, setMotionPref, type M
 import { splitDayTasks } from './features/today/dayLayout'
 import { lockTask, placeTasks, type EditLock } from './lib/editLock'
 
-type View = 'Today' | 'Inbox' | 'This week' | 'Done'
+type View = 'Today' | 'Inbox' | 'This week' | 'Missed' | 'Done'
 const NO_TASKS: Task[] = []
-const tabs: View[] = ['Today', 'Inbox', 'This week', 'Done']
-const TAB_ICONS: Record<View, ReactNode> = { Today: <Sun size={16}/>, Inbox: <Inbox size={16}/>, 'This week': <CalendarRange size={16}/>, Done: <CircleCheck size={16}/> }
+const MISSED_DISMISSED_KEY = 'taskflow:missed-reminder-dismissed'
+const tabs: View[] = ['Today', 'Inbox', 'This week', 'Missed', 'Done']
+const TAB_ICONS: Record<View, ReactNode> = { Today: <Sun size={16}/>, Inbox: <Inbox size={16}/>, 'This week': <CalendarRange size={16}/>, Missed: <CalendarX size={16}/>, Done: <CircleCheck size={16}/> }
 
 type BeforeInstallPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }> }
 
@@ -173,16 +174,20 @@ function App() {
   // The top-ranked task for the day gets a highlight in the schedule.
   const nextTask = useMemo(() => rankOneThing(selectedDayTasks)[0], [selectedDayTasks])
   const { timed: allTimed, anytime: allAnytime } = useMemo(() => splitDayTasks(selectedDayTasks), [selectedDayTasks])
-  const missedTasks = useMemo(() => view === 'Today' && isSameLocalDay(selectedDay, new Date())
-    ? placedTasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && isMissed(task))
-    : NO_TASKS, [placedTasks, view, selectedDay])
+  // Open dated tasks from before today live in their own Missed tab, oldest first.
+  const missedTasks = useMemo(() => placedTasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && isMissed(task))
+    .sort((a, b) => Date.parse(a.due_at!) - Date.parse(b.due_at!)), [placedTasks, dayKey])
   const missedIds = useMemo(() => new Set(missedTasks.map(task => task.id)), [missedTasks])
-  const timedTodayTasks = useMemo(() => allTimed.filter(task => !missedIds.has(task.id)), [allTimed, missedIds])
-  const anytimeTasks = useMemo(() => allAnytime.filter(task => !missedIds.has(task.id)), [allAnytime, missedIds])
+  // Only today or later can be selected, so nothing here is ever missed.
+  const timedTodayTasks = allTimed
+  const anytimeTasks = allAnytime
+  const [missedDismissedDay, setMissedDismissedDay] = useState(() => { try { return localStorage.getItem(MISSED_DISMISSED_KEY) } catch { return null } })
+  const showMissedReminder = missedTasks.length > 0 && missedDismissedDay !== dayKey
+  const dismissMissedReminder = () => { setMissedDismissedDay(dayKey); try { localStorage.setItem(MISSED_DISMISSED_KEY, dayKey) } catch { /* the reminder just returns next visit */ } }
   const viewingToday = isSameLocalDay(selectedDay, new Date())
   const now = useNow(view === 'Today' && viewingToday)
   const pinnedTask = pinnedEditId ? tasks.find(task => task.id === pinnedEditId && !task.deleted_at && task.status === 'open') : undefined
-  const allClear = view === 'Today' && viewingToday && timedTodayTasks.length === 0 && anytimeTasks.length === 0 && missedTasks.length === 0 && completedThisSession > 0
+  const allClear = view === 'Today' && viewingToday && timedTodayTasks.length === 0 && anytimeTasks.length === 0 && completedThisSession > 0
   const basicTasks = useMemo(() => tasks.filter(task => classifyView(task) === 'Inbox' && needsDetailsPrompt(task)), [tasks])
   const selectedQuickTask = quickDetailsTaskId ? tasks.find(task => task.id === quickDetailsTaskId && task.status === 'open' && !task.deleted_at && task.is_inbox && !task.details_prompted_at) : undefined
 
@@ -341,6 +346,12 @@ function App() {
       inboxReleaseTimersRef.current.set(task.id, timer)
     }
     if (values.reminder_offset && values.reminder_offset !== 'none' && !settings.currentPushEndpoint) void settings.setupPush(false)
+  }
+
+  async function moveAllToToday(list: Task[]) {
+    const before = list.map(task => [task, { due_at: task.due_at, due_is_approx: task.due_is_approx }] as const)
+    await Promise.all(list.map(task => updateTask(task, movedToToday(task))))
+    setToast({ text: `Moved ${list.length} to today`, undo: async () => { await Promise.all(before.map(([task, values]) => updateTask(task, values))) } })
   }
 
   async function releaseInboxTask(task: Task) {
@@ -542,7 +553,7 @@ function App() {
   }
 
   const taskCounts = useMemo(() => {
-    const counts: Record<View, number> = { Today: 0, Inbox: 0, 'This week': 0, Done: 0 }
+    const counts: Record<View, number> = { Today: 0, Inbox: 0, 'This week': 0, Missed: 0, Done: 0 }
     const perDay = new Map<string, number>()
     const today = startOfLocalDay(new Date())
     for (const task of tasks) {
@@ -554,7 +565,8 @@ function App() {
         const key = localDayKey(due)
         perDay.set(key, (perDay.get(key) ?? 0) + 1)
         if (due >= weekStart && due < weekEnd) counts['This week']++
-        if (isSameLocalDay(due, today) || isMissed(task)) counts.Today++
+        if (isSameLocalDay(due, today)) counts.Today++
+        else if (due < today) counts.Missed++
       }
     }
     return { counts, perDay }
@@ -602,6 +614,7 @@ function App() {
             const count = taskCounts.perDay.get(localDayKey(day)) ?? 0
             return <button type="button" key={day.toISOString()} className={`day-strip-item ${isSameLocalDay(day, selectedDay) ? 'selected' : ''}`} aria-pressed={isSameLocalDay(day, selectedDay)} onClick={() => selectDay(day)}><span>{isSameLocalDay(day, new Date()) ? 'Today' : day.toLocaleDateString(undefined, { weekday: 'short' })}</span><strong>{day.getDate()}</strong><span className="day-strip-count">{count || ' '}</span></button>
           })}</section>}
+          {view === 'Today' && showMissedReminder && <aside className="missed-reminder" aria-label="Missed tasks"><CalendarX size={15} aria-hidden="true"/><span>{missedTasks.length} missed {missedTasks.length === 1 ? 'task' : 'tasks'}</span><button className="text-button" onClick={() => chooseView('Missed')}>Review</button><button className="icon-button" aria-label="Dismiss for today" onClick={dismissMissedReminder}><X size={15}/></button></aside>}
           {view === 'Today' && <div className="today-split">
             {basicTasks.length > 0 && <aside className="quick-details-prompt"><span>{basicTasks.length} {basicTasks.length === 1 ? 'Inbox task could' : 'Inbox tasks could'} use more details.</span><button className="secondary-button" onClick={() => openTaskDetailsInInbox(basicTasks[0].id)}>Open Inbox</button></aside>}
             {selectedQuickTask && <QuickDetailsCard key={selectedQuickTask.id} task={selectedQuickTask} labels={labels} isOnline={isOnline} onUpdate={onRowUpdate} onFinish={skip => void finishQuickDetails(skip)}/>}
@@ -617,10 +630,10 @@ function App() {
                 {allClear ? <div className="all-clear" role="status"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M20 6 9 17l-5-5"/></svg><p>All clear for today.</p></div>
                   : renderTaskRows(anytimeTasks, `Anytime on ${todayLabel}`, timedTodayTasks.length ? 'No other tasks for this day.' : 'Nothing is planned for this day.', true)}
               </section>}
-              {missedTasks.length > 0 && <section className="missed-list"><h3>Missed</h3>{renderTaskRows(missedTasks, 'Missed tasks')}</section>}
             </section>
             <aside className="week-pane"><div className="pane-heading"><div><p className="eyebrow">Up next</p><h2>Top 5</h2></div><button className="text-button pane-link" onClick={() => chooseView('This week')}>Open week</button></div>{renderTaskRows(topTasks, 'Top 5', 'Nothing else coming up.')}</aside>
           </div>}
+          {view === 'Missed' && <section className="missed-view">{missedTasks.length > 1 && <div className="missed-actions"><span>Oldest first</span><button className="secondary-button" disabled={!isOnline} onClick={() => void moveAllToToday(missedTasks)}><CalendarCheck size={15}/>Move all to today</button></div>}{renderTaskRows(missedTasks, 'Missed', 'Nothing missed. You are all caught up.')}</section>}
           {view === 'This week' && <section className="week-view">{renderWeekAgenda(visibleTasks)}{afterWeekTasks.length > 0 && <section className="week-day-group after-week"><h3>Later</h3>{renderTaskRows(afterWeekTasks, 'Later')}</section>}</section>}
           {view === 'Inbox' && basicTasks.length > 0 && <aside className="quick-details-prompt details-inbox-prompt"><span>{basicTasks.length} {basicTasks.length === 1 ? 'task could' : 'tasks could'} use more details.</span><button className="secondary-button" onClick={() => openTaskDetailsInInbox(basicTasks[0].id)}>Add details</button></aside>}
           {view === 'Inbox' && pinnedTask && !visibleTasks.some(task => task.id === pinnedTask.id) && <section className="pinned-edit" aria-label="Task from your schedule"><div className="pinned-edit-head"><h3>From your schedule</h3><button className="text-button" onClick={() => chooseView('Today')}>Back to Today</button></div>{renderTaskRows([pinnedTask], 'From your schedule')}</section>}

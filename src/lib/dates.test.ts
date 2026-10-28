@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addLocalDays, classifyView, dateForChoice, getSevenDays, isDueOnDay, isMissed, rankOneThing, startOfLocalWeek } from './dates'
+import { addLocalDays, classifyView, dateForChoice, getSevenDays, isDueOnDay, isMissed, movedToToday, rankOneThing, startOfLocalWeek } from './dates'
 
 describe('dateForChoice', () => {
   const now = new Date(2026, 9, 21, 15, 30)
@@ -67,5 +67,18 @@ describe('Phase 2 date views', () => {
     ])
     expect(ranked[0].is_important).toBe(true)
     expect(ranked[1].created_at).toBe('2026-10-21T07:00:00.000Z')
+  })
+})
+
+describe('movedToToday', () => {
+  const now = new Date(2026, 9, 28, 15, 0)
+  it('keeps the time of day for a timed task', () => {
+    const moved = movedToToday({ due_at: new Date(2026, 9, 20, 9, 30).toISOString(), is_all_day: false }, now)
+    expect(new Date(moved.due_at)).toEqual(new Date(2026, 9, 28, 9, 30))
+    expect(moved.due_is_approx).toBe(false)
+  })
+  it('moves an all-day task to the start of today', () => {
+    const moved = movedToToday({ due_at: new Date(2026, 9, 20, 12).toISOString(), is_all_day: true }, now)
+    expect(new Date(moved.due_at)).toEqual(new Date(2026, 9, 28))
   })
 })

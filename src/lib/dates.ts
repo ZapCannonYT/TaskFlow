@@ -108,3 +108,10 @@ export function withLocalTime(value: string | null, time: string, fallback?: Dat
   date.setHours(hours, minutes, 0, 0)
   return date.toISOString()
 }
+
+/** The same task due today instead: a timed task keeps its time of day, an all-day one stays all-day. */
+export function movedToToday(task: { due_at: string | null; is_all_day: boolean }, now = new Date()) {
+  const today = dateForChoice('today', now).due_at
+  const due_at = task.due_at && !task.is_all_day ? withLocalTime(today, localTimeInput(task.due_at)) : today
+  return { due_at, due_is_approx: false }
+}
