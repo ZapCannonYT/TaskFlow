@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { CalendarDays, Mic, MicOff, Plus, Repeat, Star, Trash2, X } from 'lucide-react'
+import { CalendarDays, Mic, MicOff, NotebookPen, Plus, Repeat, Star, Trash2, X } from 'lucide-react'
 import type { Label, Task } from '../lib/supabase'
 import { dateForChoice, localDateInput, localTimeInput, middayOf, withLocalTime, type WhenChoice } from '../lib/dates'
 import { REPEAT_OPTIONS, SIZE_OPTIONS } from '../lib/taskOptions'
@@ -58,7 +58,6 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   const when = whenValue(draft)
   const hasTime = Boolean(draft.due_at && !draft.is_all_day)
-  const showSecondRow = Boolean(draft.due_at || draft.size || hasTime)
 
   async function submit(event: React.FormEvent) {
     event.preventDefault()
@@ -108,7 +107,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     }} onChange={event => setTitle(event.target.value)} disabled={!isOnline}/>{collapsed && <kbd className="composer-kbd" aria-hidden="true">/</kbd>}<button type="button" className={`icon-button voice-button ${voice.state === 'listening' ? 'listening' : ''}`} aria-label={voice.state === 'listening' ? 'Stop listening' : 'Add by voice'} disabled={!isOnline || voice.processing && voice.state !== 'listening'} onClick={() => voice.state === 'listening' ? voice.stop() : void voice.start(title)}>{voice.state === 'listening' ? <MicOff size={18}/> : <Mic size={18}/>}</button><button className="primary-button add-button" type="submit" disabled={!title.trim() || busy || !isOnline || voice.state === 'listening' || voice.state === 'transcribing' || voice.processing}>{!isOnline ? 'Offline' : busy ? 'Saving…' : voice.state === 'ready' && voice.hasTranscript ? 'Add task' : 'Add'}</button></div>
     {(voice.state === 'listening' || voice.state === 'transcribing' || voice.processing || voiceMessage || voice.modelStatus.state === 'downloading' || voice.modelStatus.state === 'error') && <div className="voice-panel"><div className="voice-status-row">{voice.state === 'listening' && <VoiceMeter meterRef={voice.meterRef}/>}<p className="voice-status" role="status">{voiceMessage || (voice.modelStatus.state === 'downloading' ? 'Downloading voice model… this may take a moment.' : voice.modelStatus.state === 'error' && voice.state === 'idle' ? 'Voice could not load. Tap the mic to retry, or type instead.' : '')}</p>{voice.processing && <button type="button" className="text-button" onClick={voice.cancelTranscription}>Stop transcription</button>}{!voice.processing && voice.canRetry && <button type="button" className="text-button" disabled={!isOnline} onClick={voice.retry}>Try again</button>}</div></div>}
     {title.trim().length > 0 && <div className="composer-options">
-      <div className="chip-row" role="group" aria-label="When, size and time">
+      {/* Three short rows, every option one click away: when it happens, what it is, and extras. */}
+      <div className="chip-row" role="group" aria-label="When">
         <label className={`select-chip when-chip ${draft.due_at ? 'active' : ''}`}><CalendarDays size={13} aria-hidden="true"/>
           <select aria-label="When" value={when} disabled={!isOnline} onChange={event => setWhen(event.target.value)}>
             <option value="">When</option>
@@ -117,18 +117,20 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           </select>
           <input ref={dateRef} className="when-date-input" aria-label="Pick a date" tabIndex={-1} type="date" disabled={!isOnline} value={localDateInput(draft.due_at)} onChange={event => setDraft(current => ({ ...current, due_at: event.target.value ? withLocalTime(middayOf(event.target.value), localTimeInput(current.due_at) || '12:00') : null, due_is_approx: false, recurrence_rule: event.target.value ? current.recurrence_rule : null }))}/>
         </label>
-        <label className={`select-chip ${draft.size ? 'active' : ''}`}><span className="sr-only">Size</span><select aria-label="Size" value={draft.size ?? ''} disabled={!isOnline} onChange={event => setDraft(current => ({ ...current, size: (event.target.value || null) as Task['size'] }))}><option value="">Size</option>{SIZE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <TimePicker className="due-time-chip" value={hasTime ? localTimeInput(draft.due_at) : ''} disabled={!isOnline} onChange={time => setDraft(current => ({ ...current, due_at: time ? withLocalTime(current.due_at, time) : current.due_at, due_is_approx: time ? false : current.due_is_approx, is_all_day: !time }))}/>
-      </div>
-      {showSecondRow && <div className="chip-row detail-row composer-row-two">
-        <ReminderPicker offset={draft.reminder_offset} minutes={draft.reminder_minutes} disabled={!isOnline || !draft.due_at || draft.due_is_approx} onChange={values => setDraft(current => ({ ...current, reminder_offset: values.reminder_offset, reminder_minutes: values.reminder_minutes ?? null }))}/>
-        <label className={`select-chip label-select ${draft.label_id ? 'active' : ''}`}><span className="sr-only">Label</span><select aria-label="Label" value={draft.label_id ?? ''} disabled={!isOnline} onChange={event => { if (event.target.value === '__edit') { setLabelEditor(true); return } setDraft(current => ({ ...current, label_id: event.target.value || null })) }}><option value="">Label</option>{labels.map(label => <option value={label.id} key={label.id}>{label.name}</option>)}<option value="__edit">Edit labels…</option></select></label>
         <label className={`select-chip ${draft.recurrence_rule ? 'active' : ''}`} title="Never means this task will not repeat."><Repeat size={13} aria-hidden="true"/><span className="sr-only">Repeat</span><select aria-label="Repeat" value={draft.recurrence_rule ?? ''} disabled={!isOnline} onChange={event => setRecurrence((event.target.value || null) as Task['recurrence_rule'])}><option value="">Never</option>{REPEAT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      </div>
+      <div className="chip-row" role="group" aria-label="Details">
+        <label className={`select-chip ${draft.size ? 'active' : ''}`}><span className="sr-only">Size</span><select aria-label="Size" value={draft.size ?? ''} disabled={!isOnline} onChange={event => setDraft(current => ({ ...current, size: (event.target.value || null) as Task['size'] }))}><option value="">Size</option>{SIZE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <button type="button" disabled={!isOnline} className={`choice-chip icon-chip ${draft.is_important ? 'starred' : ''}`} aria-label={draft.is_important ? 'Remove Important' : 'Mark Important'} aria-pressed={draft.is_important} onClick={() => setDraft(current => ({ ...current, is_important: !current.is_important }))}><Star size={15}/>Important</button>
         <ColorPicker value={draft.color} disabled={!isOnline} onChange={color => setDraft(current => ({ ...current, color }))}/>
-        {!noteOpen && <button type="button" className="text-button add-note" disabled={!isOnline} onClick={() => setNoteOpen(true)}>Add note</button>}
-      </div>}
-      {showSecondRow && noteOpen && <label className="description-field">Note<textarea aria-label="Description" maxLength={5000} disabled={!isOnline} value={draft.description} placeholder="Add a description or helpful context…" autoFocus onChange={event => setDraft(current => ({ ...current, description: event.target.value }))}/></label>}
+        <label className={`select-chip label-select ${draft.label_id ? 'active' : ''}`}><span className="sr-only">Label</span><select aria-label="Label" value={draft.label_id ?? ''} disabled={!isOnline} onChange={event => { if (event.target.value === '__edit') { setLabelEditor(true); return } setDraft(current => ({ ...current, label_id: event.target.value || null })) }}><option value="">Label</option>{labels.map(label => <option value={label.id} key={label.id}>{label.name}</option>)}<option value="__edit">Edit labels…</option></select></label>
+      </div>
+      <div className="chip-row" role="group" aria-label="Extras">
+        <ReminderPicker offset={draft.reminder_offset} minutes={draft.reminder_minutes} disabled={!isOnline || !draft.due_at || draft.due_is_approx} onChange={values => setDraft(current => ({ ...current, reminder_offset: values.reminder_offset, reminder_minutes: values.reminder_minutes ?? null }))}/>
+        <button type="button" disabled={!isOnline} className={`choice-chip ${noteOpen || draft.description.trim() ? 'active' : ''}`} aria-pressed={noteOpen} onClick={() => setNoteOpen(open => !open)}><NotebookPen size={14} aria-hidden="true"/>Note</button>
+      </div>
+      {noteOpen && <label className="description-field">Note<textarea aria-label="Description" maxLength={5000} disabled={!isOnline} value={draft.description} placeholder="Add a description or helpful context…" autoFocus onChange={event => setDraft(current => ({ ...current, description: event.target.value }))}/></label>}
       {labelEditor && <div className="label-manager"><div className="label-form"><label htmlFor="new-label">New label</label><input id="new-label" disabled={!isOnline} value={newLabel} maxLength={32} onChange={event => setNewLabel(event.target.value)} placeholder="Label name"/><button type="button" disabled={!isOnline} className="secondary-button" onClick={() => { const name = newLabel.trim(); if (name) void onCreateLabel(name).then(() => setNewLabel('')) }}>Add label</button><button type="button" className="icon-button" aria-label="Close label editor" onClick={() => setLabelEditor(false)}><X size={16}/></button></div><div className="label-list">{labels.map(label => <div className="label-admin-row" key={label.id}><span className="label-tag">{label.name}</span><input aria-label={`Rename ${label.name}`} disabled={!isOnline} defaultValue={label.name} maxLength={32} onBlur={event => void onRenameLabel(label, event.target.value)} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }}/><button type="button" disabled={!isOnline} className="icon-button" aria-label={`Remove label ${label.name}`} onClick={() => void onDeleteLabel(label)}><Trash2 size={15}/></button></div>)}</div></div>}
     </div>}
   </form>
