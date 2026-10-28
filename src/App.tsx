@@ -9,6 +9,7 @@ import { rankCompanionTasks } from './lib/companion'
 import { nextOccurrence } from './lib/recurrence'
 import { Composer, type ComposerHandle, type DraftDetails } from './components/Composer'
 import { TaskRow } from './components/TaskRow'
+import { TaskList } from './components/TaskList'
 import { DayGrid } from './components/DayGrid'
 import { AuthScreen } from './components/AuthScreen'
 import { LoadingRows } from './components/LoadingRows'
@@ -555,10 +556,10 @@ function App() {
   const onRowRemove = useCallback((task: Task) => { void rowActionsRef.current.removeTask(task) }, [])
 
   function renderTaskRows(items: Task[], listName: string, emptyMessage = "Nothing here yet.", hideDate = false) {
-    return <section className="task-list" aria-label={listName + " tasks"}>
+    return <TaskList label={`${listName} tasks`} animate={settlingIds.length === 0}>
       {!items.length && (tasksLoaded ? <p className="empty-state">{emptyMessage}</p> : <LoadingRows/>)}
       {items.map(task => <TaskRow key={task.id} task={editLock?.id === task.id ? tasks.find(live => live.id === task.id) ?? task : task} labels={labels} listName={listName} hideDate={hideDate} isOnline={isOnline} expanded={expanded === task.id} isNew={newTaskId === task.id} isCompleting={completingIds.has(task.id)} isSettling={settleIndexById.has(task.id)} settleIndex={settleIndexById.get(task.id) ?? 0} onToggleExpand={onToggleTaskExpand} onComplete={onRowComplete} onUpdate={onRowUpdate} onRemove={onRowRemove}/>)}
-    </section>
+    </TaskList>
   }
 
   function renderWeekAgenda(source: Task[], omitThrough?: Date) {

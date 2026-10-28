@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@formkit/auto-animate": "^0.10.0",
     "@huggingface/transformers": "^4.3.1",
     "@supabase/supabase-js": "^2.76.1",
     "lucide-react": "^0.468.0",
