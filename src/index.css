@@ -485,7 +485,10 @@ button, .choice-chip, .select-chip, .nav-item { -webkit-tap-highlight-color: tra
 .color-picker { position: relative; display: inline-flex; }
 .color-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--swatch); border: 1px solid var(--border); }
 .color-swatches { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.color-picker .color-swatches { position: absolute; z-index: 6; top: calc(100% + 6px); left: 0; padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 6px 18px rgba(15, 14, 19, .18); flex-wrap: nowrap; animation: options-enter calc(120ms * var(--m)) var(--ease-out) both; }
+/* Popovers live in <body> above everything else (the phone composer sits at 9), so nothing clips or covers them. */
+.popover { position: fixed; z-index: 70; box-sizing: border-box; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: 0 10px 28px rgba(15, 14, 19, .22); animation: options-enter calc(120ms * var(--m)) var(--ease-out) both; }
+.color-popover { padding: 8px; }
+.color-popover .color-swatches { flex-wrap: wrap; justify-content: center; }
 .color-swatch { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 2px solid transparent; border-radius: 50%; background: var(--swatch); color: var(--surface); }
 .color-swatch[aria-checked="true"] { border-color: var(--text); }
 .color-swatch.none { border: 1px dashed var(--border); background: transparent; color: var(--muted); }
@@ -508,7 +511,7 @@ button, .choice-chip, .select-chip, .nav-item { -webkit-tap-highlight-color: tra
 .time-picker { display: inline-flex; }
 .time-chip { cursor: pointer; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .time-chip.active { color: var(--text); }
-.time-popover { position: fixed; z-index: 70; width: 240px; display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); color: var(--text); box-shadow: 0 10px 28px rgba(15, 14, 19, .22); animation: options-enter calc(140ms * var(--m)) var(--ease-out) both; }
+.time-popover { display: grid; gap: 10px; padding: 12px; }
 .time-wheels { position: relative; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 2px; }
 .time-wheels::before { content: ''; position: absolute; left: 0; right: 0; top: 72px; height: 36px; border-radius: 10px; background: var(--accent-soft); pointer-events: none; }
 .wheel { position: relative; height: 180px; overflow-y: auto; scroll-snap-type: y mandatory; overscroll-behavior: contain; scrollbar-width: none; outline: 0; border-radius: 10px;

@@ -1,7 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { Clock3 } from 'lucide-react'
 import { formatTime12 } from '../lib/dates'
+import { Popover, usePopover } from './Popover'
 
 type TimePickerProps = {
   /** 24-hour `HH:MM`, or '' for no time. */
@@ -40,61 +40,29 @@ function NativeTime({ value, disabled, className = '', label = 'Time', variant =
 }
 
 function WheelTime({ value, disabled, className = '', label = 'Time', onChange }: TimePickerProps) {
-  const [open, setOpen] = useState(false)
-  const [pos, setPos] = useState<CSSProperties>({})
-  const buttonRef = useRef<HTMLButtonElement>(null)
-  const popRef = useRef<HTMLDivElement>(null)
+  const { open, toggle, close, anchorRef } = usePopover()
   const hasValue = /^\d{1,2}:\d{2}$/.test(value)
   // With no time set, the wheels start on the next whole hour, like a phone alarm.
   const [h, m] = hasValue ? value.split(':').map(Number) : [(new Date().getHours() + 1) % 24, 0]
   const hour12 = h % 12 || 12
   const pm = h >= 12
 
-  useLayoutEffect(() => {
-    if (!open || !buttonRef.current) return
-    const rect = buttonRef.current.getBoundingClientRect()
-    const left = Math.max(8, Math.min(rect.left, window.innerWidth - POPOVER_WIDTH - 8))
-    const below = window.innerHeight - rect.bottom
-    setPos(below < 280 && rect.top > below ? { left, bottom: window.innerHeight - rect.top + 6 } : { left, top: rect.bottom + 6 })
-  }, [open])
-
-  useEffect(() => {
-    if (!open) return
-    const onPointer = (event: PointerEvent) => {
-      const target = event.target as Node
-      if (!popRef.current?.contains(target) && !buttonRef.current?.contains(target)) setOpen(false)
-    }
-    const onKey = (event: globalThis.KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); setOpen(false); buttonRef.current?.focus() } }
-    const onScroll = (event: Event) => { if (!popRef.current?.contains(event.target as Node)) setOpen(false) }
-    document.addEventListener('pointerdown', onPointer)
-    document.addEventListener('keydown', onKey, true)
-    window.addEventListener('scroll', onScroll, true)
-    window.addEventListener('resize', onScroll)
-    return () => {
-      document.removeEventListener('pointerdown', onPointer)
-      document.removeEventListener('keydown', onKey, true)
-      window.removeEventListener('scroll', onScroll, true)
-      window.removeEventListener('resize', onScroll)
-    }
-  }, [open])
-
   return <span className={`time-picker ${className}`}>
-    <button ref={buttonRef} type="button" className={`select-chip time-chip ${hasValue ? 'active' : ''}`} aria-label={hasValue ? `${label}, ${formatTime12(value)}` : label}
-      aria-haspopup="dialog" aria-expanded={open} disabled={disabled} onClick={() => setOpen(current => !current)}>
+    <button ref={anchorRef} type="button" className={`select-chip time-chip ${hasValue ? 'active' : ''}`} aria-label={hasValue ? `${label}, ${formatTime12(value)}` : label}
+      aria-haspopup="dialog" aria-expanded={open} disabled={disabled} onClick={toggle}>
       <Clock3 size={13} aria-hidden="true"/>{hasValue ? formatTime12(value) : label}
     </button>
-    {/* Portalled to <body>: an animated ancestor (the task editor keeps a transform) would otherwise capture the fixed popover. */}
-    {open && createPortal(<div ref={popRef} className="time-popover" role="dialog" aria-label={`Choose ${label.toLowerCase()}`} style={pos}>
+    {open && <Popover anchorRef={anchorRef} width={POPOVER_WIDTH} height={268} className="time-popover" label={`Choose ${label.toLowerCase()}`} onClose={close}>
       <div className="time-wheels">
         <Wheel label="Hour" items={HOURS} index={hour12 - 1} onSelect={i => onChange(toValue(i + 1, m, pm))}/>
         <Wheel label="Minute" items={MINUTES} index={m} onSelect={i => onChange(toValue(hour12, i, pm))}/>
         <Wheel label="AM or PM" items={HALVES} index={pm ? 1 : 0} onSelect={i => onChange(toValue(hour12, m, i === 1))}/>
       </div>
       <div className="time-popover-foot">
-        <button type="button" className="text-button" disabled={!hasValue} onClick={() => { onChange(''); setOpen(false) }}>Clear</button>
-        <button type="button" className="primary-button" onClick={() => { if (!hasValue) onChange(toValue(hour12, m, pm)); setOpen(false) }}>Done</button>
+        <button type="button" className="text-button" disabled={!hasValue} onClick={() => { onChange(''); close() }}>Clear</button>
+        <button type="button" className="primary-button" onClick={() => { if (!hasValue) onChange(toValue(hour12, m, pm)); close() }}>Done</button>
       </div>
-    </div>, document.body)}
+    </Popover>}
   </span>
 }
 
