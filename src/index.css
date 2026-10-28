@@ -553,3 +553,8 @@ button, .choice-chip, .select-chip, .nav-item { -webkit-tap-highlight-color: tra
 .missed-row-actions { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .missed-row-actions .secondary-button { min-height: 34px; padding: 0 10px; }
 @media (max-width: 760px) { .missed-row-actions .secondary-button { padding: 0 8px; } }
+
+.change-password { display: grid; gap: 12px; max-width: 360px; margin-top: 12px; }
+.change-password label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
+.change-password input { min-height: 40px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font-size: 14px; }
+.change-password .settings-actions { margin-top: 0; }

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { ArrowLeft, Bell, Database, LogOut, Sparkles, UserRound } from 'lucide-react'
 import type { MotionPref } from '../../lib/motion'
 import type { NotificationSettings } from './useNotificationSettings'
+import { ChangePassword } from './ChangePassword'
 
 type SettingsPageProps = {
   settings: NotificationSettings
@@ -12,7 +13,8 @@ type SettingsPageProps = {
   onMotionPref(pref: MotionPref): void
   onExport(): void
   onRestore(file?: File): void
-  onSignOut(): void
+  /** `everywhere` ends the sessions on all devices, for a lost phone or a shared computer. */
+  onSignOut(everywhere: boolean): void
   onClose(): void
 }
 
@@ -48,7 +50,8 @@ export function SettingsPage({ settings, isOnline, pushConfigured, email, motion
 
     <Section icon={<UserRound size={16}/>} title="Account">
       {email && <p className="settings-copy">Signed in as <strong>{email}</strong></p>}
-      <div className="settings-actions"><button className="secondary-button" onClick={onSignOut}><LogOut size={15}/>Sign out</button></div>
+      {email && <ChangePassword email={email} isOnline={isOnline}/>}
+      <div className="settings-actions"><button className="secondary-button" onClick={() => onSignOut(false)}><LogOut size={15}/>Sign out</button><button className="secondary-button" disabled={!isOnline} title="Ends every session, on all your devices" onClick={() => onSignOut(true)}>Sign out everywhere</button></div>
     </Section>
 
     <p className="settings-copy settings-version">Version {__APP_VERSION__.replace(/\.0$/, '')}</p>

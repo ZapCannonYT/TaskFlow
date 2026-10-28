@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react'
 import { Check, Eye, EyeOff, Mic, Bell, RefreshCw } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { MIN_PASSWORD_LENGTH, passwordProblem } from '../lib/password'
 
 type Mode = 'sign-in' | 'sign-up' | 'forgot' | 'reset'
 type Notice = { text: string; tone: 'error' | 'info' }
@@ -36,8 +37,10 @@ export function AuthScreen({ recovering = false, onSignedIn }: { recovering?: bo
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (!supabase || busy) return
-    setBusy(true); setNotice(null)
     const address = email.trim()
+    const weak = mode === 'sign-up' || mode === 'reset' ? passwordProblem(password, address) : null
+    if (weak) { setNotice({ tone: 'error', text: weak }); return }
+    setBusy(true); setNotice(null)
     try {
       if (mode === 'forgot') {
         const { error } = await supabase.auth.resetPasswordForEmail(address, { redirectTo: window.location.origin })
@@ -78,10 +81,10 @@ export function AuthScreen({ recovering = false, onSignedIn }: { recovering?: bo
         {needsPassword && <div className="auth-field">
           <span className="auth-label-row"><label htmlFor="auth-password">Password</label>{mode === 'sign-in' && <button type="button" className="text-button auth-forgot" onClick={() => switchMode('forgot')}>Forgot password?</button>}</span>
           <span className="password-field">
-            <input id="auth-password" type={showPassword ? 'text' : 'password'} autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'} minLength={6} required autoFocus={!needsEmail} value={password} onChange={e => setPassword(e.target.value)}/>
+            <input id="auth-password" type={showPassword ? 'text' : 'password'} autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'} minLength={mode === 'sign-in' ? undefined : MIN_PASSWORD_LENGTH} required autoFocus={!needsEmail} value={password} onChange={e => setPassword(e.target.value)}/>
             <button type="button" className="icon-button" aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword} onClick={() => setShowPassword(shown => !shown)}>{showPassword ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
           </span>
-          {mode !== 'sign-in' && <span className="auth-hint">At least 6 characters.</span>}
+          {mode !== 'sign-in' && <span className="auth-hint">At least {MIN_PASSWORD_LENGTH} characters, with a letter and a number.</span>}
         </div>}
         {notice && <p className={`notice ${notice.tone === 'error' ? 'notice-error' : ''}`} role={notice.tone === 'error' ? 'alert' : 'status'}>{notice.text}</p>}
         <button className="primary-button auth-submit" disabled={busy}>{busy ? 'Please wait…' : heading.submit}</button>

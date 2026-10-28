@@ -28,6 +28,7 @@ import { lockTask, placeTasks, type EditLock } from './lib/editLock'
 
 type View = 'Today' | 'Inbox' | 'This week' | 'Missed' | 'Done'
 const NO_TASKS: Task[] = []
+const MAX_BACKUP_BYTES = 20 * 1024 * 1024
 const MISSED_DISMISSED_KEY = 'taskflow:missed-reminder-dismissed'
 const tabs: View[] = ['Today', 'Inbox', 'This week', 'Missed', 'Done']
 const TAB_ICONS: Record<View, ReactNode> = { Today: <Sun size={16}/>, Inbox: <Inbox size={16}/>, 'This week': <CalendarRange size={16}/>, Missed: <CalendarX size={16}/>, Done: <CircleCheck size={16}/> }
@@ -277,6 +278,7 @@ function App() {
 
   async function restoreData(file?: File) {
     if (!file || !isOnline) return
+    if (file.size > MAX_BACKUP_BYTES) { setError('Backup not restored · That file is too large to be a Taski backup.'); return }
     try { await restoreBackup(file); await load(); setError(''); setToast({ text: 'Backup restored' }) }
     catch (cause) { setError(`Backup not restored · ${cause instanceof Error ? cause.message : 'Check the file and try again.'}`) }
   }
@@ -303,6 +305,12 @@ function App() {
     if (!action || !reminderId || !['open', 'done', 'hour', 'later', 'skip'].includes(action)) return
     handledNotificationAction.current = true
     void (async () => {
+      // A link can be typed by anyone; act only when it matches a real reminder of yours for that same task.
+      const reminder = await supabase!.from('task_reminders').select('id, task_id').eq('id', reminderId).maybeSingle()
+      if (reminder.error || !reminder.data || (taskId && reminder.data.task_id !== taskId)) {
+        dropParams(params, 'task_action', 'task_id', 'reminder_id')
+        return
+      }
       if (action === 'done' && taskId) {
         const result = await supabase!.from('tasks').select('*, labels(name)').eq('id', taskId).maybeSingle()
         if (result.error || !result.data) setError(`Task could not be completed · ${result.error?.message ?? 'Task not found.'}`)
@@ -618,7 +626,7 @@ function App() {
       <aside className="sidebar"><p className="nav-label">Your lists</p><nav aria-label="Task views">{tabs.map(tab => <button key={tab} className={`nav-item ${view === tab ? 'selected' : ''}`} aria-current={view === tab ? 'page' : undefined} onClick={() => chooseView(tab)}>{TAB_ICONS[tab]} {tab}<span className="nav-count">{viewCount(tab)}</span></button>)}</nav></aside>
       <main className="main-content">
         <div className={`content-inner ${view === 'Today' ? 'today-content' : ''}`}>
-          {settingsOpen ? <>{errorBanner}<SettingsPage settings={settings} isOnline={isOnline} pushConfigured={pushConfigured} email={userEmail} motionPref={motionPref} onMotionPref={pref => { setMotionPref(pref); setMotionPrefState(pref) }} onExport={() => void exportData()} onRestore={file => void restoreData(file)} onSignOut={() => void supabase?.auth.signOut()} onClose={() => setSettingsOpen(false)}/></> : <>
+          {settingsOpen ? <>{errorBanner}<SettingsPage settings={settings} isOnline={isOnline} pushConfigured={pushConfigured} email={userEmail} motionPref={motionPref} onMotionPref={pref => { setMotionPref(pref); setMotionPrefState(pref) }} onExport={() => void exportData()} onRestore={file => void restoreData(file)} onSignOut={everywhere => void supabase?.auth.signOut({ scope: everywhere ? 'global' : 'local' })} onClose={() => setSettingsOpen(false)}/></> : <>
           {showNotificationPrompt && <aside className="nudge-offer" aria-label="Daily nudge setup"><span>Want a daily nudge so nothing slips?</span><div><button className="primary-button" disabled={!isOnline || settings.pushBusy} onClick={() => void settings.enableNotifications()}>{settings.pushBusy ? 'Setting up…' : 'Yes'}</button><button className="text-button" disabled={!isOnline} onClick={() => void settings.deferNotificationPrompt()}>Not now</button></div></aside>}
           {view === 'Today' ? <h1 className="sr-only">{todayLabel}</h1> : <div className="page-heading"><h1>{view}</h1>{view === 'This week' && <span className="list-caption">{weekStart.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – {addLocalDays(weekStart, 6).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>}</div>}
           <button type="button" className="add-fab" aria-label="Add a task" onClick={openComposer}><Plus size={18}/>Add task</button>

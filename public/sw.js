@@ -60,7 +60,9 @@ self.addEventListener('push', event => {
 self.addEventListener('notificationclick', event => {
   event.notification.close()
   const data = event.notification.data || {}
-  const target = new URL(data.url || '/', self.location.origin)
+  // Only ever open this app: a push payload pointing elsewhere falls back to the home screen.
+  const requested = new URL(data.url || '/', self.location.origin)
+  const target = requested.origin === self.location.origin ? requested : new URL('/', self.location.origin)
   if (data.reminder_id) {
     const action = ['done', 'hour', 'later', 'skip'].includes(event.action) ? event.action : 'open'
     target.searchParams.set('task_action', action)
