@@ -26,8 +26,9 @@ export function useTaskSync({ signedIn, userId, pendingRef, setError, setErrorRe
   const load = useCallback(async () => {
     if (!supabase || !navigator.onLine) return
     const seq = ++loadSeqRef.current
+    // Tasks created together share created_at; the id tiebreak stops them swapping places on every reload.
     const [taskResult, labelResult] = await Promise.all([
-      supabase.from('tasks').select('*, labels(name)').order('created_at', { ascending: false }),
+      supabase.from('tasks').select('*, labels(name)').order('created_at', { ascending: false }).order('id'),
       supabase.from('labels').select('*').order('name'),
     ])
     if (seq !== loadSeqRef.current) return
