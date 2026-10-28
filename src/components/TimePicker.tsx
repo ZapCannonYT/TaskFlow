@@ -22,7 +22,8 @@ const POPOVER_WIDTH = 240
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const toValue = (hour12: number, minute: number, pm: boolean) => `${pad((hour12 % 12) + (pm ? 12 : 0))}:${pad(minute)}`
-const isTouch = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
+// Any phone or tablet (a touch screen, no hover, or a narrow window) gets the browser's own time selector.
+const isTouch = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse), (hover: none), (max-width: 639px)').matches
 
 /**
  * Phones get the browser's own time box, whose wheel already reads well there.

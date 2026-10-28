@@ -1,8 +1,9 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { CalendarDays, Mic, MicOff, NotebookPen, Plus, Repeat, Star, Trash2, X } from 'lucide-react'
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { CalendarDays, Clock3, Mic, MicOff, NotebookPen, Plus, Repeat, Star, Trash2, X } from 'lucide-react'
 import type { Label, Task } from '../lib/supabase'
-import { dateForChoice, localDateInput, localTimeInput, middayOf, withLocalTime, type WhenChoice } from '../lib/dates'
-import { REPEAT_OPTIONS, SIZE_OPTIONS } from '../lib/taskOptions'
+import { dateForChoice, formatTime12, localDateInput, localTimeInput, middayOf, withLocalTime, type WhenChoice } from '../lib/dates'
+import { REPEAT_MENU, SIZE_MENU, whenMenu, type WhenValue } from '../lib/taskOptions'
+import { SelectMenu, type MenuOption } from './SelectMenu'
 import { parseNaturalTask } from '../lib/naturalTime'
 import { isBasicTask } from '../lib/quickDetails'
 import { useVoiceCapture } from '../features/voice/useVoiceCapture'
@@ -56,7 +57,19 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const voiceMessage = hideTranscriptNotice ? '' : voice.message
   useImperativeHandle(ref, () => ({ focus: () => inputRef.current?.focus(), startVoice: () => { void voice.start(title) }, setTitle: value => setTitle(value) }), [title, voice.start])
 
-  const when = whenValue(draft)
+  const when = whenValue(draft) as WhenValue
+  // A date or time typed into the title ("call mom at 5pm") is shown before saving, so it is clear what will be set.
+  const detected = useMemo(() => {
+    const text = title.trim()
+    if (!text) return null
+    const parsed = parseNaturalTask(text, draft.due_at)
+    if (!parsed.due_at || !parsed.title || parsed.title === text.replace(/\s+/g, ' ')) return null
+    const due = new Date(parsed.due_at)
+    const day = due.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
+    return { title: parsed.title, when: parsed.has_time ? `${day}, ${formatTime12(due)}` : day }
+  }, [title, draft.due_at])
+  const whenOptions = useMemo(() => whenMenu(), [title.trim().length > 0])
+  const labelOptions = useMemo<MenuOption<string>[]>(() => [{ value: '', label: 'No label' }, ...labels.map(label => ({ value: label.id, label: label.name })), { value: '__edit', label: 'Edit labels…', divider: true }], [labels])
   const hasTime = Boolean(draft.due_at && !draft.is_all_day)
 
   async function submit(event: React.FormEvent) {
@@ -107,24 +120,26 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     }} onChange={event => setTitle(event.target.value)} disabled={!isOnline}/>{collapsed && <kbd className="composer-kbd" aria-hidden="true">/</kbd>}<button type="button" className={`icon-button voice-button ${voice.state === 'listening' ? 'listening' : ''}`} aria-label={voice.state === 'listening' ? 'Stop listening' : 'Add by voice'} disabled={!isOnline || voice.processing && voice.state !== 'listening'} onClick={() => voice.state === 'listening' ? voice.stop() : void voice.start(title)}>{voice.state === 'listening' ? <MicOff size={18}/> : <Mic size={18}/>}</button><button className="primary-button add-button" type="submit" disabled={!title.trim() || busy || !isOnline || voice.state === 'listening' || voice.state === 'transcribing' || voice.processing}>{!isOnline ? 'Offline' : busy ? 'Saving…' : voice.state === 'ready' && voice.hasTranscript ? 'Add task' : 'Add'}</button></div>
     {(voice.state === 'listening' || voice.state === 'transcribing' || voice.processing || voiceMessage || voice.modelStatus.state === 'downloading' || voice.modelStatus.state === 'error') && <div className="voice-panel"><div className="voice-status-row">{voice.state === 'listening' && <VoiceMeter meterRef={voice.meterRef}/>}<p className="voice-status" role="status">{voiceMessage || (voice.modelStatus.state === 'downloading' ? 'Downloading voice model… this may take a moment.' : voice.modelStatus.state === 'error' && voice.state === 'idle' ? 'Voice could not load. Tap the mic to retry, or type instead.' : '')}</p>{voice.processing && <button type="button" className="text-button" onClick={voice.cancelTranscription}>Stop transcription</button>}{!voice.processing && voice.canRetry && <button type="button" className="text-button" disabled={!isOnline} onClick={voice.retry}>Try again</button>}</div></div>}
     {title.trim().length > 0 && <div className="composer-options">
+      {detected && <p className="parse-hint" role="status"><Clock3 size={13} aria-hidden="true"/><span>{detected.when}</span><span className="parse-hint-title">saves as “{detected.title}”</span></p>}
       {/* Three short rows, every option one click away: when it happens, what it is, and extras. */}
       <div className="chip-row" role="group" aria-label="When">
-        <label className={`select-chip when-chip ${draft.due_at ? 'active' : ''}`}><CalendarDays size={13} aria-hidden="true"/>
-          <select aria-label="When" value={when} disabled={!isOnline} onChange={event => setWhen(event.target.value)}>
-            <option value="">When</option>
-            {WHEN_CHOICES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-            <option value="date">{when === 'date' && draft.due_at ? new Date(draft.due_at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : 'Pick a date…'}</option>
-          </select>
+        <span className="when-chip">
+          <SelectMenu label="When" value={when} options={whenOptions} disabled={!isOnline} active={Boolean(draft.due_at)} icon={<CalendarDays size={13} aria-hidden="true"/>}
+            display={!draft.due_at ? 'When' : when === 'date' ? new Date(draft.due_at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : undefined}
+            onChange={setWhen}/>
           <input ref={dateRef} className="when-date-input" aria-label="Pick a date" tabIndex={-1} type="date" disabled={!isOnline} value={localDateInput(draft.due_at)} onChange={event => setDraft(current => ({ ...current, due_at: event.target.value ? withLocalTime(middayOf(event.target.value), localTimeInput(current.due_at) || '12:00') : null, due_is_approx: false, recurrence_rule: event.target.value ? current.recurrence_rule : null }))}/>
-        </label>
+        </span>
         <TimePicker className="due-time-chip" value={hasTime ? localTimeInput(draft.due_at) : ''} disabled={!isOnline} onChange={time => setDraft(current => ({ ...current, due_at: time ? withLocalTime(current.due_at, time) : current.due_at, due_is_approx: time ? false : current.due_is_approx, is_all_day: !time }))}/>
-        <label className={`select-chip ${draft.recurrence_rule ? 'active' : ''}`} title="Never means this task will not repeat."><Repeat size={13} aria-hidden="true"/><span className="sr-only">Repeat</span><select aria-label="Repeat" value={draft.recurrence_rule ?? ''} disabled={!isOnline} onChange={event => setRecurrence((event.target.value || null) as Task['recurrence_rule'])}><option value="">Never</option>{REPEAT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <SelectMenu label="Repeat" value={draft.recurrence_rule ?? ''} options={REPEAT_MENU} disabled={!isOnline} active={Boolean(draft.recurrence_rule)} icon={<Repeat size={13} aria-hidden="true"/>}
+          display={draft.recurrence_rule ? undefined : 'Repeat'} onChange={value => setRecurrence((value || null) as Task['recurrence_rule'])}/>
       </div>
       <div className="chip-row" role="group" aria-label="Details">
-        <label className={`select-chip ${draft.size ? 'active' : ''}`}><span className="sr-only">Size</span><select aria-label="Size" value={draft.size ?? ''} disabled={!isOnline} onChange={event => setDraft(current => ({ ...current, size: (event.target.value || null) as Task['size'] }))}><option value="">Size</option>{SIZE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <SelectMenu label="Size" value={draft.size ?? ''} options={SIZE_MENU} disabled={!isOnline} active={Boolean(draft.size)} display={draft.size ? undefined : 'Size'}
+          onChange={value => setDraft(current => ({ ...current, size: (value || null) as Task['size'] }))}/>
         <button type="button" disabled={!isOnline} className={`choice-chip icon-chip ${draft.is_important ? 'starred' : ''}`} aria-label={draft.is_important ? 'Remove Important' : 'Mark Important'} aria-pressed={draft.is_important} onClick={() => setDraft(current => ({ ...current, is_important: !current.is_important }))}><Star size={15}/>Important</button>
         <ColorPicker value={draft.color} disabled={!isOnline} onChange={color => setDraft(current => ({ ...current, color }))}/>
-        <label className={`select-chip label-select ${draft.label_id ? 'active' : ''}`}><span className="sr-only">Label</span><select aria-label="Label" value={draft.label_id ?? ''} disabled={!isOnline} onChange={event => { if (event.target.value === '__edit') { setLabelEditor(true); return } setDraft(current => ({ ...current, label_id: event.target.value || null })) }}><option value="">Label</option>{labels.map(label => <option value={label.id} key={label.id}>{label.name}</option>)}<option value="__edit">Edit labels…</option></select></label>
+        <SelectMenu label="Label" value={draft.label_id ?? ''} options={labelOptions} disabled={!isOnline} active={Boolean(draft.label_id)} display={draft.label_id ? undefined : 'Label'}
+          onChange={value => { if (value === '__edit') { setLabelEditor(true); return } setDraft(current => ({ ...current, label_id: value || null })) }}/>
       </div>
       <div className="chip-row" role="group" aria-label="Extras">
         <ReminderPicker offset={draft.reminder_offset} minutes={draft.reminder_minutes} disabled={!isOnline || !draft.due_at || draft.due_is_approx} onChange={values => setDraft(current => ({ ...current, reminder_offset: values.reminder_offset, reminder_minutes: values.reminder_minutes ?? null }))}/>

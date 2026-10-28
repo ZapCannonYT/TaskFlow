@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Bell } from 'lucide-react'
 import type { Task } from '../lib/supabase'
-import { MAX_REMINDER_MINUTES, REMINDER_OPTIONS, reminderChange, splitMinutes, toMinutes, UNIT_MINUTES, type ReminderOffset, type ReminderUnit } from '../lib/reminders'
+import { REMINDER_MENU } from '../lib/taskOptions'
+import { SelectMenu } from './SelectMenu'
+import { MAX_REMINDER_MINUTES, reminderChange, splitMinutes, toMinutes, UNIT_MINUTES, type ReminderOffset, type ReminderUnit } from '../lib/reminders'
 
 type ReminderPickerProps = {
   offset: ReminderOffset
@@ -24,9 +26,9 @@ export function ReminderPicker({ offset, minutes, disabled, variant = 'chip', on
     const next = toMinutes(value, nextUnit)
     if (next !== minutes) onChange({ reminder_offset: 'custom', reminder_minutes: next })
   }
-  const select = <select aria-label="Reminder" value={offset} disabled={disabled} onChange={event => onChange(reminderChange(event.target.value as ReminderOffset, minutes))}>
-    {REMINDER_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-  </select>
+  const select = <SelectMenu label="Reminder" variant={variant} value={offset} options={REMINDER_MENU} disabled={disabled} active={offset !== 'none'}
+    icon={variant === 'chip' ? <Bell size={13} aria-hidden="true"/> : undefined} display={offset === 'custom' ? 'Custom' : undefined}
+    onChange={next => onChange(reminderChange(next, minutes))}/>
   const custom = offset === 'custom' && <span className="reminder-custom">
     <input aria-label="Reminder amount" type="number" inputMode="numeric" min={1} max={Math.floor(MAX_REMINDER_MINUTES / UNIT_MINUTES[unit])} step={1} disabled={disabled}
       value={amount} onChange={event => setAmount(event.target.value)} onBlur={() => commit(amount, unit)}
@@ -37,6 +39,6 @@ export function ReminderPicker({ offset, minutes, disabled, variant = 'chip', on
     <span className="reminder-custom-suffix">before</span>
   </span>
 
-  if (variant === 'field') return <label className="edit-select reminder-field">Remind me<span className="reminder-field-controls">{select}{custom}</span></label>
-  return <label className={`select-chip reminder-chip ${offset !== 'none' ? 'active' : ''}`}><Bell size={13} aria-hidden="true"/>{select}{custom}</label>
+  if (variant === 'field') return <div className="edit-select reminder-field"><span>Remind me</span><span className="reminder-field-controls">{select}{custom}</span></div>
+  return <span className="reminder-chip-group">{select}{custom}</span>
 }

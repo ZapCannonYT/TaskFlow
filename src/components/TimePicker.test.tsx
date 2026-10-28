@@ -43,7 +43,7 @@ describe('TimePicker', () => {
   })
 
   it('uses the browser time box on touch screens', () => {
-    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(pointer: coarse)', media: query, addEventListener() {}, removeEventListener() {} }))
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('(pointer: coarse)'), media: query, addEventListener() {}, removeEventListener() {} }))
     render(<Harness initial="17:30"/>)
     expect(screen.getByLabelText('Time')).toHaveAttribute('type', 'time')
     expect(screen.queryByRole('button', { name: /Time/ })).not.toBeInTheDocument()

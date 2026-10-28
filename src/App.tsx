@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { CalendarCheck, CalendarRange, CalendarX, Check, CircleCheck, Download, Inbox, Plus, Settings as SettingsIcon, Sun, X } from 'lucide-react'
 import { isSupabaseConfigured, Label, supabase, Task } from './lib/supabase'
@@ -29,6 +29,7 @@ import { lockTask, placeTasks, type EditLock } from './lib/editLock'
 
 type View = 'Today' | 'Inbox' | 'This week' | 'Missed' | 'Done'
 const NO_TASKS: Task[] = []
+const TAB_SLUGS: Record<View, string> = { Today: 'today', Inbox: 'inbox', 'This week': 'week', Missed: 'missed', Done: 'done' }
 const MAX_BACKUP_BYTES = 20 * 1024 * 1024
 const MISSED_DISMISSED_KEY = 'taskflow:missed-reminder-dismissed'
 const tabs: View[] = ['Today', 'Inbox', 'This week', 'Missed', 'Done']
@@ -68,6 +69,8 @@ function App() {
   const [isOnline, setIsOnline] = useState(navigator.onLine)
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Which side a newly chosen tab slides in from: 1 when it sits to the right of the previous tab, -1 to the left.
+  const [enterFrom, setEnterFrom] = useState(0)
   const [motionPref, setMotionPrefState] = useState<MotionPref>(getMotionPref)
   const [quickDetailsTaskId, setQuickDetailsTaskId] = useState<string | null>(null)
   const composerRef = useRef<ComposerHandle>(null)
@@ -208,6 +211,7 @@ function App() {
   }
 
   function chooseView(nextView: View) {
+    setEnterFrom(Math.sign(tabs.indexOf(nextView) - tabs.indexOf(view)))
     setSettingsOpen(false)
     commitCompletions()
     setPinnedEditId(null)
@@ -624,7 +628,7 @@ function App() {
     <header className="topbar"><a className="brand" href="#" aria-label="Taskflow home"><span className="brand-mark"><Check size={16} /></span><span>Taskflow</span></a><div className="topbar-right">{installPrompt && <button className="text-button install-button" onClick={() => void installApp()}><Download size={15}/>Install app</button>}<span className="sync-state">{isOnline && syncStatus === 'Synced' && <span className="online-dot" />}{isOnline ? syncStatus : 'Offline'}</span><button className={`icon-button settings-button ${settingsOpen ? 'active' : ''}`} aria-label="Settings" aria-pressed={settingsOpen} title="Settings" onClick={() => settingsOpen ? setSettingsOpen(false) : openSettings()}><SettingsIcon size={19}/></button></div></header>
     {!isOnline && <div className="offline-banner" role="status">Offline · showing your last saved tasks. Reconnect to make changes.</div>}
     <div className="workspace">
-      <aside className="sidebar"><p className="nav-label">Your lists</p><nav aria-label="Task views">{tabs.map(tab => <button key={tab} className={`nav-item ${view === tab ? 'selected' : ''}`} aria-current={view === tab ? 'page' : undefined} onClick={() => chooseView(tab)}>{TAB_ICONS[tab]} {tab}<span className="nav-count">{viewCount(tab)}</span></button>)}</nav></aside>
+      <aside className="sidebar"><p className="nav-label">Your lists</p><nav aria-label="Task views">{tabs.map(tab => { const current = view === tab && !settingsOpen; const count = viewCount(tab); return <button key={tab} className={`nav-item nav-${TAB_SLUGS[tab]} ${current ? 'selected' : ''}`} aria-current={current ? 'page' : undefined} onClick={() => chooseView(tab)}><span className="nav-icon" aria-hidden="true">{TAB_ICONS[tab]}</span><span className="nav-text">{tab}</span>{count > 0 && <span className={`nav-count ${tab === 'Missed' ? 'is-alert' : ''}`}>{count}</span>}</button> })}</nav></aside>
       <main className="main-content">
         <div className={`content-inner ${view === 'Today' ? 'today-content' : ''}`}>
           {settingsOpen ? <>{errorBanner}<SettingsPage settings={settings} isOnline={isOnline} pushConfigured={pushConfigured} email={userEmail} motionPref={motionPref} onMotionPref={pref => { setMotionPref(pref); setMotionPrefState(pref) }} onExport={() => void exportData()} onRestore={file => void restoreData(file)} onSignOut={everywhere => void supabase?.auth.signOut({ scope: everywhere ? 'global' : 'local' })} onClose={() => setSettingsOpen(false)}/></> : <>
@@ -634,7 +638,7 @@ function App() {
           {composerOpen && <button type="button" className="composer-scrim" aria-label="Close add task" tabIndex={-1} onClick={() => setComposerOpen(false)}/>}
           <Composer ref={composerRef} open={composerOpen} labels={labels} isOnline={isOnline} busy={busy} onSubmit={async (title, draft) => { const saved = await addTask(title, draft); if (saved) setComposerOpen(false); return saved }} onCreateLabel={createLabel} onRenameLabel={renameLabel} onDeleteLabel={deleteLabel}/>
           {errorBanner}
-          <div key={view} className="view-enter">
+          <div key={view} className="view-enter" style={{ '--enter-x': `${enterFrom * 14}px` } as CSSProperties}>
           {view === 'Today' && <section className="day-strip" aria-label="Choose a day">{todayDays.map(day => {
             const count = taskCounts.perDay.get(localDayKey(day)) ?? 0
             return <button type="button" key={day.toISOString()} className={`day-strip-item ${isSameLocalDay(day, selectedDay) ? 'selected' : ''}`} aria-pressed={isSameLocalDay(day, selectedDay)} onClick={() => selectDay(day)}><span>{isSameLocalDay(day, new Date()) ? 'Today' : day.toLocaleDateString(undefined, { weekday: 'short' })}</span><strong>{day.getDate()}</strong><span className="day-strip-count">{count || ' '}</span></button>
@@ -656,7 +660,7 @@ function App() {
                   : renderTaskRows(anytimeTasks, `Anytime on ${todayLabel}`, timedTodayTasks.length ? 'No other tasks for this day.' : 'Nothing is planned for this day.', true)}
               </section>}
             </section>
-            <aside className="week-pane"><div className="pane-heading"><div><p className="eyebrow">Up next</p><h2>Top 5</h2></div><button className="text-button pane-link" onClick={() => chooseView('This week')}>Open week</button></div>{renderTaskRows(topTasks, 'Top 5', 'Nothing else coming up.')}</aside>
+            <aside className="week-pane"><div className="pane-heading"><h2>Up next</h2><button className="text-button pane-link" onClick={() => chooseView('This week')}>Open week</button></div>{renderTaskRows(topTasks, 'Up next', 'Nothing else coming up.')}</aside>
           </div>}
           {view === 'Missed' && <section className="missed-view">{missedTasks.length > 1 && <div className="missed-actions"><span>Oldest first</span><button className="secondary-button" disabled={!isOnline} onClick={() => void moveAllToToday(missedTasks)}><CalendarCheck size={15}/>Move all to today</button></div>}{renderTaskRows(missedTasks, 'Missed', 'Nothing missed. You are all caught up.')}</section>}
           {view === 'This week' && <section className="week-view">{renderWeekAgenda(visibleTasks)}{afterWeekTasks.length > 0 && <section className="week-day-group after-week"><h3>Later</h3>{renderTaskRows(afterWeekTasks, 'Later')}</section>}</section>}
@@ -670,7 +674,7 @@ function App() {
       </main>
     </div>
     {toast && <div className={`toast ${toast.compact ? 'toast-compact' : ''} ${toastClosing ? 'toast-closing' : ''}`} role="status"><span>{toast.text}</span>{toast.action && <button onClick={() => { toast.action?.run(); setToast(null) }}>{toast.action.label}</button>}{toast.undo && <button disabled={!isOnline} onClick={() => { void toast.undo?.(); setToast(null) }}>Undo</button>}</div>}
-    <nav className="mobile-tabs" aria-label="Task views">{tabs.map(tab => <button key={tab} className={view === tab ? 'active' : ''} aria-current={view === tab ? 'page' : undefined} onClick={() => chooseView(tab)}>{TAB_ICONS[tab]} {tab}</button>)}</nav>
+    <nav className="mobile-tabs" aria-label="Task views">{tabs.map(tab => { const current = view === tab && !settingsOpen; const alert = tab === 'Missed' ? viewCount(tab) : 0; return <button key={tab} className={`nav-${TAB_SLUGS[tab]} ${current ? 'active' : ''}`} aria-current={current ? 'page' : undefined} aria-label={alert ? `${tab}, ${alert} tasks` : undefined} onClick={() => chooseView(tab)}><span className="tab-icon" aria-hidden="true">{TAB_ICONS[tab]}{alert > 0 && <span className="tab-badge">{alert > 99 ? '99+' : alert}</span>}</span><span className="tab-label">{tab}</span></button> })}</nav>
   </div>
 }
 
