@@ -1,24 +1,39 @@
-import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { ArchiveRestore, CalendarDays, CalendarRange, Check, CircleCheck, Download, Inbox, Plus, RotateCcw, Star, Sun, X } from 'lucide-react'
-import { isSupabaseConfigured, Label, PushSubscriptionRow, supabase, Task, UserPreferences } from './lib/supabase'
-import { addLocalDays, classifyView, dateForChoice, getSevenDays, isDueOnDay, isMissed, isSameLocalDay, localDateInput, localTimeInput, rankOneThing, startOfLocalDay, startOfLocalWeek, withLocalTime } from './lib/dates'
+import { CalendarCheck, CalendarRange, CalendarX, Check, CircleCheck, Download, Inbox, Plus, Settings as SettingsIcon, Sun, X } from 'lucide-react'
+import { isSupabaseConfigured, Label, supabase, Task } from './lib/supabase'
+import { localDayKey, addLocalDays, classifyView, dateForChoice, getSevenDays, isDueOnDay, isMissed, isSameLocalDay, movedToToday, localDateInput, rankOneThing, startOfLocalDay } from './lib/dates'
 import { isBasicTask, needsDetailsPrompt } from './lib/quickDetails'
-import { isRecentDuplicate, preferNewer } from './lib/taskRules'
+import { isRecentDuplicate } from './lib/taskRules'
 import { rankCompanionTasks } from './lib/companion'
 import { nextOccurrence } from './lib/recurrence'
 import { Composer, type ComposerHandle, type DraftDetails } from './components/Composer'
 import { TaskRow } from './components/TaskRow'
-import { TimePicker } from './components/TimePicker'
-import { ReminderPicker } from './components/ReminderPicker'
+import { TaskList } from './components/TaskList'
 import { DayGrid } from './components/DayGrid'
+import { AuthScreen } from './components/AuthScreen'
+import { LoadingRows } from './components/LoadingRows'
+import { QuickDetailsCard } from './components/QuickDetailsCard'
+import { RemovedSection } from './components/RemovedSection'
+import { SettingsPage } from './features/settings/SettingsPage'
+import { useNotificationSettings } from './features/settings/useNotificationSettings'
+import { useTaskSync, type PendingCompletion } from './features/tasks/useTaskSync'
 import { useVisualViewport } from './lib/useVisualViewport'
+import { useDayKey } from './lib/useDayKey'
+import { dropParams } from './lib/url'
+import { exportBackup, restoreBackup } from './lib/backup'
 import { useNow } from './lib/useNow'
 import { getMotionPref, motionScale, prefersReducedMotion, setMotionPref, type MotionPref } from './lib/motion'
 import { splitDayTasks } from './features/today/dayLayout'
+import { lockTask, placeTasks, type EditLock } from './lib/editLock'
 
-type View = 'Today' | 'Inbox' | 'This week' | 'Done'
-const tabs: View[] = ['Today', 'Inbox', 'This week', 'Done']
+type View = 'Today' | 'Inbox' | 'This week' | 'Missed' | 'Done'
+const NO_TASKS: Task[] = []
+const TAB_SLUGS: Record<View, string> = { Today: 'today', Inbox: 'inbox', 'This week': 'week', Missed: 'missed', Done: 'done' }
+const MAX_BACKUP_BYTES = 20 * 1024 * 1024
+const MISSED_DISMISSED_KEY = 'taskflow:missed-reminder-dismissed'
+const tabs: View[] = ['Today', 'Inbox', 'This week', 'Missed', 'Done']
+const TAB_ICONS: Record<View, ReactNode> = { Today: <Sun size={16}/>, Inbox: <Inbox size={16}/>, 'This week': <CalendarRange size={16}/>, Missed: <CalendarX size={16}/>, Done: <CircleCheck size={16}/> }
 
 type BeforeInstallPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }> }
 
@@ -27,62 +42,17 @@ const SETTLE_OUT_MS = 220
 const SETTLE_STEP_MS = 0
 const SETTLE_STAGGER_CAP = 0
 const buzz = () => { if (!prefersReducedMotion()) navigator.vibrate?.(10) }
-type PendingCompletion = { completedAt: string; nextTask: Task | null; saved: boolean }
-
-function vapidBytes(value: string) {
-  const padding = '='.repeat((4 - value.length % 4) % 4)
-  const base64 = (value + padding).replace(/-/g, '+').replace(/_/g, '/')
-  return Uint8Array.from(atob(base64), character => character.charCodeAt(0))
-}
-
-function localDayKey(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-}
-
-function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
-  const [mode, setMode] = useState<'sign-in' | 'sign-up'>('sign-in')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [notice, setNotice] = useState('')
-  const [busy, setBusy] = useState(false)
-  async function submit(event: FormEvent) {
-    event.preventDefault()
-    if (!supabase || busy) return
-    setBusy(true); setNotice('')
-    const result = mode === 'sign-in'
-      ? await supabase.auth.signInWithPassword({ email: email.trim(), password })
-      : await supabase.auth.signUp({ email: email.trim(), password })
-    setBusy(false)
-    if (result.error) setNotice(result.error.message)
-    else if (mode === 'sign-up' && !result.data.session) setNotice('Check your email to finish creating your account.')
-    else onSignedIn()
-  }
-  return <main className="auth-wrap"><section className="auth-card">
-    <div className="brand-mark" aria-hidden="true"><Check size={18} /></div>
-    <p className="eyebrow">A quiet place for your tasks</p><h1>Taskflow</h1>
-    <p className="auth-copy">Sign in to keep your tasks in sync across devices.</p>
-    <form onSubmit={submit} className="auth-form">
-      <label>Email<input type="email" autoComplete="email" required value={email} onChange={e => setEmail(e.target.value)} /></label>
-      <label>Password<input type="password" autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'} minLength={6} required value={password} onChange={e => setPassword(e.target.value)} /></label>
-      {notice && <p className="notice" role="status">{notice}</p>}
-      <button className="primary-button auth-submit" disabled={busy}>{busy ? 'Please wait…' : mode === 'sign-in' ? 'Sign in' : 'Create account'}</button>
-    </form>
-    <button className="text-button switch-auth" onClick={() => { setMode(mode === 'sign-in' ? 'sign-up' : 'sign-in'); setNotice('') }}>
-      {mode === 'sign-in' ? 'Create an account' : 'Already have an account? Sign in'}
-    </button>
-  </section></main>
-}
 
 function App() {
   useVisualViewport()
   const [sessionReady, setSessionReady] = useState(!isSupabaseConfigured)
   const [signedIn, setSignedIn] = useState(false)
+  // Following a password reset link signs in with a recovery session; ask for the new password before the app opens.
+  const [recovering, setRecovering] = useState(false)
   const [view, setViewState] = useState<View>('Today')
   const [selectedDay, setSelectedDay] = useState(() => startOfLocalDay(new Date()))
-  const [tasks, setTasks] = useState<Task[]>([])
-  const [tasksLoaded, setTasksLoaded] = useState(false)
   const [userId, setUserId] = useState<string | null>(null)
-  const [labels, setLabels] = useState<Label[]>([])
+  const [userEmail, setUserEmail] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [toast, setToast] = useState<{ text: string; compact?: boolean; undo?: () => Promise<void>; action?: { label: string; run: () => void } } | null>(null)
@@ -96,41 +66,27 @@ function App() {
   const [clearDeletedBusy, setClearDeletedBusy] = useState(false)
   const inboxReleaseTimersRef = useRef(new Map<string, number>())
   const [busy, setBusy] = useState(false)
-  const [syncStatus, setSyncStatus] = useState(navigator.onLine ? 'Connecting' : 'Offline')
   const [isOnline, setIsOnline] = useState(navigator.onLine)
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
-  const [preferences, setPreferences] = useState<UserPreferences | null>(null)
-  const [pushSubscriptions, setPushSubscriptions] = useState<PushSubscriptionRow[]>([])
-  const [currentPushEndpoint, setCurrentPushEndpoint] = useState<string | null>(null)
-  const [devicePushStateChecked, setDevicePushStateChecked] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsDraft, setSettingsDraft] = useState({ daily_nudge_time: '18:30', quiet_hours_start: '22:30', quiet_hours_end: '08:00', weekly_summary_enabled: true })
-  const [pushBusy, setPushBusy] = useState(false)
+  // Which side a newly chosen tab slides in from: 1 when it sits to the right of the previous tab, -1 to the left.
+  const [enterFrom, setEnterFrom] = useState(0)
   const [motionPref, setMotionPrefState] = useState<MotionPref>(getMotionPref)
   const [quickDetailsTaskId, setQuickDetailsTaskId] = useState<string | null>(null)
-  const [quickDescription, setQuickDescription] = useState('')
   const composerRef = useRef<ComposerHandle>(null)
   // Phones show the composer only after the floating Add button is tapped; desktop ignores this.
   const [composerOpen, setComposerOpen] = useState(false)
   const openComposer = useCallback(() => { flushSync(() => setComposerOpen(true)); composerRef.current?.focus() }, [])
   const pendingRef = useRef(new Map<string, PendingCompletion>())
-  const loadSeqRef = useRef(0)
   const addingRef = useRef(false)
   const settleTimerRef = useRef<number | undefined>(undefined)
   const commitTimerRef = useRef<number | undefined>(undefined)
   const settleIndexById = useMemo(() => new Map(settlingIds.map((id, index) => [id, Math.min(index, SETTLE_STAGGER_CAP)] as const)), [settlingIds])
   const setCompleting = (id: string, on: boolean) => setCompletingIds(current => { const next = new Set(current); if (on) next.add(id); else next.delete(id); return next })
-  const [notificationMessage, setNotificationMessage] = useState('')
-  const [retryPushSetup, setRetryPushSetup] = useState<boolean | null>(null)
   const [errorRetryable, setErrorRetryable] = useState(false)
-  const [dayKey, setDayKey] = useState(() => localDayKey(new Date()))
-  useEffect(() => {
-    const refresh = () => setDayKey(localDayKey(new Date()))
-    const onVisible = () => { if (document.visibilityState === 'visible') refresh() }
-    const timer = window.setInterval(refresh, 60000)
-    document.addEventListener('visibilitychange', onVisible)
-    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible) }
-  }, [])
+  const { tasks, setTasks, labels, setLabels, tasksLoaded, syncStatus, load } = useTaskSync({ signedIn, userId, pendingRef, setError, setErrorRetryable })
+  const settings = useNotificationSettings({ signedIn, isOnline, setError, setErrorRetryable })
+  const dayKey = useDayKey()
 
   useLayoutEffect(() => {
     const root = document.documentElement
@@ -166,9 +122,11 @@ function App() {
 
   useEffect(() => {
     if (!supabase) return
-    supabase.auth.getSession().then(({ data }) => { setSignedIn(Boolean(data.session)); setUserId(data.session?.user.id ?? null); setSessionReady(true) })
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSignedIn(Boolean(session)); setUserId(session?.user.id ?? null)
+    supabase.auth.getSession().then(({ data }) => { setSignedIn(Boolean(data.session)); setUserId(data.session?.user.id ?? null); setUserEmail(data.session?.user.email ?? null); setSessionReady(true) })
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') setRecovering(true)
+      setSignedIn(Boolean(session)); setUserId(session?.user.id ?? null); setUserEmail(session?.user.email ?? null)
+      if (!session) setSettingsOpen(false)
       if (!session) {
         try { Object.keys(localStorage).filter(key => key.startsWith('taskflow:snapshot:')).forEach(key => localStorage.removeItem(key)) }
         catch { /* local snapshots are optional */ }
@@ -177,115 +135,6 @@ function App() {
     return () => listener.subscription.unsubscribe()
   }, [])
 
-  const load = useCallback(async () => {
-    if (!supabase || !navigator.onLine) return
-    const seq = ++loadSeqRef.current
-    const [taskResult, labelResult] = await Promise.all([
-      supabase.from('tasks').select('*, labels(name)').order('created_at', { ascending: false }),
-      supabase.from('labels').select('*').order('name'),
-    ])
-    if (seq !== loadSeqRef.current) return
-    let loadError = ''
-    let resolvedLabels = (labelResult.data ?? []) as Label[]
-    if (taskResult.error) loadError = taskResult.error.message
-    else {
-      const fetched = (taskResult.data ?? []) as Task[]
-      setTasks(current => {
-        const currentById = new Map(current.map(task => [task.id, task]))
-        const remoteTasks = preferNewer(fetched, currentById)
-        const pendingIds = new Set(pendingRef.current.keys())
-        if (!pendingIds.size) return remoteTasks
-        const pendingNextIds = new Set([...pendingRef.current.values()].flatMap(entry => entry.nextTask ? [entry.nextTask.id] : []))
-        const remoteIds = new Set(remoteTasks.map(task => task.id))
-        return [
-          ...remoteTasks.filter(task => !pendingNextIds.has(task.id)).map(task => pendingIds.has(task.id) ? currentById.get(task.id) ?? task : task),
-          ...[...pendingIds].flatMap(id => !remoteIds.has(id) && currentById.has(id) ? [currentById.get(id)!] : []),
-        ]
-      })
-    }
-    if (labelResult.error) loadError ||= labelResult.error.message
-    else {
-      const loaded = resolvedLabels
-      setLabels(loaded)
-      if (!loaded.length) {
-        const { data: userData } = await supabase.auth.getUser()
-        if (userData.user) {
-          const inserted = await supabase.from('labels').insert(['Study', 'Work', 'Personal'].map(name => ({ user_id: userData.user!.id, name }))).select('*')
-          if (!inserted.error) { resolvedLabels = inserted.data as Label[]; setLabels(resolvedLabels) }
-        }
-      }
-    }
-    setError(loadError); setErrorRetryable(Boolean(loadError))
-    setTasksLoaded(true)
-    if (!loadError && userId) {
-      try {
-        const tasksSnapshot = taskResult.data ?? []
-        const labelsSnapshot = resolvedLabels
-        const snapshot = JSON.stringify({ tasks: tasksSnapshot, labels: labelsSnapshot, savedAt: Date.now() })
-        if (snapshot.length < 1_000_000) localStorage.setItem(`taskflow:snapshot:v1:${userId}`, snapshot)
-      } catch { /* local snapshots are optional */ }
-    }
-  }, [userId])
-
-  useEffect(() => {
-    if (!signedIn || !supabase) return
-    const client = supabase
-    if (userId) {
-      try {
-        const saved = localStorage.getItem(`taskflow:snapshot:v1:${userId}`)
-        if (saved) {
-          const snapshot = JSON.parse(saved) as { tasks?: Task[]; labels?: Label[]; savedAt?: number }
-          if (Date.now() - (snapshot.savedAt ?? 0) < 60_000 && Array.isArray(snapshot.tasks) && Array.isArray(snapshot.labels)) {
-            setTasks(snapshot.tasks); setLabels(snapshot.labels); setTasksLoaded(true)
-          }
-        }
-      } catch { /* ignore invalid or inaccessible local storage */ }
-    }
-    void load()
-    let reloadTimer = 0
-    const scheduleLoad = () => { window.clearTimeout(reloadTimer); reloadTimer = window.setTimeout(() => void load(), 250) }
-    const channel = client.channel('phase1-sync')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, scheduleLoad)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'labels' }, scheduleLoad)
-      .subscribe(status => {
-        if (status === 'SUBSCRIBED') setSyncStatus(navigator.onLine ? 'Synced' : 'Offline')
-        else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') setSyncStatus('Sync unavailable')
-      })
-    const onFocus = () => { if (navigator.onLine) void load() }
-    const onOffline = () => setSyncStatus('Offline')
-    const onOnline = () => { setSyncStatus('Connecting'); void load() }
-    window.addEventListener('focus', onFocus)
-    window.addEventListener('offline', onOffline)
-    window.addEventListener('online', onOnline)
-    return () => { window.clearTimeout(reloadTimer); window.removeEventListener('focus', onFocus); window.removeEventListener('offline', onOffline); window.removeEventListener('online', onOnline); void client.removeChannel(channel) }
-  }, [signedIn, userId, load])
-
-  const loadNotificationSettings = useCallback(async () => {
-    if (!supabase) return
-    const [{ data: pref, error: prefError }, { data: devices }] = await Promise.all([
-      supabase.from('user_preferences').select('*').maybeSingle(),
-      supabase.from('push_subscriptions').select('id,endpoint,disabled_at,created_at').is('disabled_at', null).order('created_at', { ascending: false }),
-    ])
-    if (prefError) { setError(`Settings could not load · ${prefError.message}`); return }
-    if (pref) {
-      const row = pref as UserPreferences
-      setPreferences(row)
-      setSettingsDraft({ daily_nudge_time: row.daily_nudge_time, quiet_hours_start: row.quiet_hours_start, quiet_hours_end: row.quiet_hours_end, weekly_summary_enabled: row.weekly_summary_enabled })
-    }
-    setPushSubscriptions((devices ?? []) as PushSubscriptionRow[])
-    if ('serviceWorker' in navigator) {
-      try {
-        const registration = await navigator.serviceWorker.ready
-        const subscription = await registration.pushManager.getSubscription()
-        setCurrentPushEndpoint(subscription?.endpoint ?? null)
-      } catch {
-        setCurrentPushEndpoint(null)
-      }
-    } else setCurrentPushEndpoint(null)
-    setDevicePushStateChecked(true)
-  }, [])
-
-  useEffect(() => { if (signedIn) void loadNotificationSettings() }, [signedIn, loadNotificationSettings])
 
   useEffect(() => {
     if (!toast) return
@@ -303,7 +152,7 @@ function App() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { setExpanded(null); setComposerOpen(false); return }
+      if (event.key === 'Escape') { setExpanded(null); setComposerOpen(false); setSettingsOpen(false); return }
       if (!(event.key === '/' || event.key.toLowerCase() === 'n' || event.key.toLowerCase() === 'c') || event.ctrlKey || event.metaKey || event.altKey) return
       const active = document.activeElement
       if (active instanceof HTMLElement && (active.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName))) return
@@ -313,41 +162,57 @@ function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [openComposer])
 
-  const visibleTasks = useMemo(() => {
-    const active = tasks.filter(task => !task.deleted_at)
-    if (view === 'Done') return active.filter(task => task.status === 'completed')
-    if (view === 'Today') return active.filter(task => task.status === 'open' && !task.is_inbox && isDueOnDay(task, selectedDay))
-    if (view === 'Inbox') return active.filter(task => task.status === 'open' && classifyView(task) === 'Inbox')
-    const weekStart = startOfLocalDay(new Date())
-    const weekEnd = addLocalDays(weekStart, 7)
-    return active.filter(task => task.status === 'open' && !task.is_inbox && task.due_at && new Date(task.due_at) >= weekStart && new Date(task.due_at) < weekEnd)
-  }, [tasks, view, selectedDay])
-  const deletedTasks = useMemo(() => tasks.filter(task => task.deleted_at), [tasks])
-  const todayDays = useMemo(() => getSevenDays(), [dayKey])
   // "This week" is a rolling seven days from today, matching the day strip, so it is never nearly empty on a Sunday.
   const weekStart = useMemo(() => startOfLocalDay(new Date()), [dayKey])
   const weekEnd = useMemo(() => addLocalDays(weekStart, 7), [weekStart])
+  // The open task keeps its place in every list until editing ends (Done, Escape, or opening another task).
+  const [editLock, setEditLock] = useState<EditLock | null>(null)
+  useEffect(() => { setEditLock(current => current?.id === expanded ? current : lockTask(tasks.find(task => task.id === expanded))) }, [expanded])
+  const placedTasks = useMemo(() => placeTasks(tasks, editLock), [tasks, editLock])
+  const visibleTasks = useMemo(() => {
+    const active = placedTasks.filter(task => !task.deleted_at)
+    if (view === 'Done') return active.filter(task => task.status === 'completed')
+    if (view === 'Today') return active.filter(task => task.status === 'open' && !task.is_inbox && isDueOnDay(task, selectedDay))
+    if (view === 'Inbox') return active.filter(task => task.status === 'open' && classifyView(task) === 'Inbox')
+    return active.filter(task => task.status === 'open' && !task.is_inbox && task.due_at && new Date(task.due_at) >= weekStart && new Date(task.due_at) < weekEnd)
+  }, [placedTasks, view, selectedDay, weekStart, weekEnd])
+  const deletedTasks = useMemo(() => tasks.filter(task => task.deleted_at), [tasks])
+  const todayDays = useMemo(() => getSevenDays(), [dayKey])
   // Tasks beyond this week used to live in a separate Later tab; they now close out the week view.
-  const afterWeekTasks = useMemo(() => tasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && task.due_at && new Date(task.due_at) >= weekEnd).sort((a, b) => Date.parse(a.due_at!) - Date.parse(b.due_at!)), [tasks, weekEnd])
-  const selectedDayTasks = view === 'Today' ? visibleTasks : []
+  const afterWeekTasks = useMemo(() => placedTasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && task.due_at && new Date(task.due_at) >= weekEnd).sort((a, b) => Date.parse(a.due_at!) - Date.parse(b.due_at!)), [placedTasks, weekEnd])
+  const selectedDayTasks = view === 'Today' ? visibleTasks : NO_TASKS
   // The top-ranked task for the day gets a highlight in the schedule.
-  const nextTask = view === 'Today' ? rankOneThing(selectedDayTasks)[0] : undefined
+  const nextTask = useMemo(() => rankOneThing(selectedDayTasks)[0], [selectedDayTasks])
   const { timed: allTimed, anytime: allAnytime } = useMemo(() => splitDayTasks(selectedDayTasks), [selectedDayTasks])
-  const missedTasks = useMemo(() => view === 'Today' && isSameLocalDay(selectedDay, new Date())
-    ? tasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && isMissed(task))
-    : [], [tasks, view, selectedDay])
+  // Open dated tasks from before today live in their own Missed tab, oldest first.
+  const missedTasks = useMemo(() => placedTasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && isMissed(task))
+    .sort((a, b) => Date.parse(a.due_at!) - Date.parse(b.due_at!)), [placedTasks, dayKey])
   const missedIds = useMemo(() => new Set(missedTasks.map(task => task.id)), [missedTasks])
-  const timedTodayTasks = useMemo(() => allTimed.filter(task => !missedIds.has(task.id)), [allTimed, missedIds])
-  const anytimeTasks = useMemo(() => allAnytime.filter(task => !missedIds.has(task.id)), [allAnytime, missedIds])
+  // Only today or later can be selected, so nothing here is ever missed.
+  const timedTodayTasks = allTimed
+  const anytimeTasks = allAnytime
+  const [missedDismissedDay, setMissedDismissedDay] = useState(() => { try { return localStorage.getItem(MISSED_DISMISSED_KEY) } catch { return null } })
+  const showMissedReminder = missedTasks.length > 0 && missedDismissedDay !== dayKey
+  const dismissMissedReminder = () => { setMissedDismissedDay(dayKey); try { localStorage.setItem(MISSED_DISMISSED_KEY, dayKey) } catch { /* the reminder just returns next visit */ } }
   const viewingToday = isSameLocalDay(selectedDay, new Date())
   const now = useNow(view === 'Today' && viewingToday)
   const pinnedTask = pinnedEditId ? tasks.find(task => task.id === pinnedEditId && !task.deleted_at && task.status === 'open') : undefined
-  const allClear = view === 'Today' && viewingToday && timedTodayTasks.length === 0 && anytimeTasks.length === 0 && missedTasks.length === 0 && completedThisSession > 0
+  const allClear = view === 'Today' && viewingToday && timedTodayTasks.length === 0 && anytimeTasks.length === 0 && completedThisSession > 0
   const basicTasks = useMemo(() => tasks.filter(task => classifyView(task) === 'Inbox' && needsDetailsPrompt(task)), [tasks])
   const selectedQuickTask = quickDetailsTaskId ? tasks.find(task => task.id === quickDetailsTaskId && task.status === 'open' && !task.deleted_at && task.is_inbox && !task.details_prompted_at) : undefined
-  useEffect(() => { setQuickDescription(selectedQuickTask?.description ?? '') }, [selectedQuickTask?.id])
+
+  function openSettings() {
+    commitCompletions()
+    setExpanded(null)
+    setComposerOpen(false)
+    setSettingsOpen(true)
+    void settings.loadNotificationSettings()
+    window.scrollTo({ top: 0 })
+  }
 
   function chooseView(nextView: View) {
+    setEnterFrom(Math.sign(tabs.indexOf(nextView) - tabs.indexOf(view)))
+    setSettingsOpen(false)
     commitCompletions()
     setPinnedEditId(null)
     if (nextView === 'Today') setSelectedDay(startOfLocalDay(new Date()))
@@ -411,53 +276,16 @@ function App() {
     return true
   }
 
-  async function savePreferences(values: Partial<UserPreferences>) {
-    if (!supabase || !isOnline) return false
-    const { data: auth, error: authError } = await supabase.auth.getUser()
-    if (authError || !auth.user) { setError('Settings not saved · Sign in again to update your notification settings.'); return false }
-    const { data, error: saveError } = await supabase.from('user_preferences')
-      .update(values)
-      .eq('user_id', auth.user.id)
-      .select('*')
-      .single()
-    if (saveError) { setError(`Settings not saved · ${saveError.message}`); return false }
-    setPreferences(data as UserPreferences)
-    return true
+  async function exportData() {
+    if (!isOnline) { setError('Reconnect to export your latest data.'); return }
+    setError(await exportBackup())
   }
 
-  async function exportBackup() {
-    if (!supabase || !isOnline) { setError('Reconnect to export your latest data.'); return }
-    const [{ data: userData }, taskResult, labelResult, prefResult] = await Promise.all([
-      supabase.auth.getUser(),
-      supabase.from('tasks').select('*').order('created_at'),
-      supabase.from('labels').select('*').order('name'),
-      supabase.from('user_preferences').select('*').maybeSingle(),
-    ])
-    const failure = taskResult.error || labelResult.error || prefResult.error
-    if (failure || !userData.user) { setError(`Export could not be prepared · ${failure?.message ?? 'Sign in again.'}`); return }
-    const backup = { format: 'taski-backup', version: 1, exported_at: new Date().toISOString(), user_id: userData.user.id, tasks: taskResult.data ?? [], labels: labelResult.data ?? [], preferences: prefResult.data ?? null }
-    const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }))
-    const anchor = document.createElement('a'); anchor.href = url; anchor.download = `taski-backup-${new Date().toISOString().slice(0, 10)}.json`; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-    setError('')
-  }
-
-  async function restoreBackup(file?: File) {
-    if (!file || !supabase || !isOnline) return
-    try {
-      const backup = JSON.parse(await file.text()) as { format?: string; version?: number; tasks?: Task[]; labels?: Label[]; preferences?: UserPreferences | null }
-      if (backup.format !== 'taski-backup' || backup.version !== 1 || !Array.isArray(backup.tasks) || !Array.isArray(backup.labels)) throw new Error('Choose a Taski JSON backup file.')
-      const { data: userData } = await supabase.auth.getUser()
-      if (!userData.user) throw new Error('Sign in again to restore your data.')
-      const labelsToRestore = backup.labels.map(({ id, name }) => ({ id, name, user_id: userData.user!.id }))
-      const tasksToRestore = backup.tasks.map(task => {
-        const { labels: _joined, ...row } = task
-        return { ...row, user_id: userData.user!.id }
-      })
-      if (labelsToRestore.length) { const result = await supabase.from('labels').upsert(labelsToRestore, { onConflict: 'id' }); if (result.error) throw result.error }
-      if (tasksToRestore.length) { const result = await supabase.from('tasks').upsert(tasksToRestore, { onConflict: 'id' }); if (result.error) throw result.error }
-      if (backup.preferences) { const { user_id: _userId, ...values } = backup.preferences; const result = await supabase.from('user_preferences').update(values).eq('user_id', userData.user.id); if (result.error) throw result.error }
-      await load(); setError(''); setToast({ text: 'Backup restored' })
-    } catch (cause) { setError(`Backup not restored · ${cause instanceof Error ? cause.message : 'Check the file and try again.'}`) }
+  async function restoreData(file?: File) {
+    if (!file || !isOnline) return
+    if (file.size > MAX_BACKUP_BYTES) { setError('Backup not restored · That file is too large to be a Taski backup.'); return }
+    try { await restoreBackup(file); await load(); setError(''); setToast({ text: 'Backup restored' }) }
+    catch (cause) { setError(`Backup not restored · ${cause instanceof Error ? cause.message : 'Check the file and try again.'}`) }
   }
 
   async function finishQuickDetails(skip: boolean) {
@@ -472,89 +300,6 @@ function App() {
     if (skip) setError('')
   }
 
-  async function setupPush(enableDailyNudge: boolean) {
-    if (!supabase || !isOnline || pushBusy) return
-    setRetryPushSetup(null)
-    const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined
-    if (!vapidPublicKey || !('Notification' in window) || !('PushManager' in window)) {
-      setError('Notifications are not supported or configured in this browser.')
-      return
-    }
-    setPushBusy(true); setError('')
-    try {
-      const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission()
-      if (permission !== 'granted') { setError('Notifications were not enabled. You can change this in browser settings.'); return }
-      const registration = await navigator.serviceWorker.ready
-      let subscription = await registration.pushManager.getSubscription()
-      if (!subscription) subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidBytes(vapidPublicKey) })
-      const json = subscription.toJSON()
-      if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) throw new Error('This browser did not return a complete push subscription.')
-      const { data: userData } = await supabase.auth.getUser()
-      if (!userData.user) throw new Error('Sign in again to enable notifications.')
-      const { data: existing } = await supabase.from('push_subscriptions').select('id').eq('endpoint', json.endpoint).maybeSingle()
-      const saved = existing
-        ? await supabase.from('push_subscriptions').update({ p256dh: json.keys.p256dh, auth: json.keys.auth, disabled_at: null, last_seen_at: new Date().toISOString() }).eq('id', existing.id)
-        : await supabase.from('push_subscriptions').insert({ user_id: userData.user.id, endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth })
-      if (saved.error) throw saved.error
-      if (enableDailyNudge) {
-        const enabled = await savePreferences({ daily_nudge_enabled: true, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata' })
-        if (!enabled) return
-      }
-      await loadNotificationSettings()
-      setError('')
-      setRetryPushSetup(null)
-      if (!enableDailyNudge) setNotificationMessage('This device is set up for task reminders.')
-    } catch (cause) {
-      const detail = cause instanceof Error ? cause.message : 'Try again.'
-      setRetryPushSetup(enableDailyNudge)
-      setErrorRetryable(true)
-      setError(detail.includes('Registration failed - push service error')
-        ? 'Chrome’s push service could not register this device. Retry in a moment. If it keeps happening, check your connection and Chrome’s notification permission for this site.'
-        : `Notifications could not be enabled · ${detail}`)
-    } finally { setPushBusy(false) }
-  }
-
-  async function enableNotifications() { await setupPush(true) }
-
-  async function deferNotificationPrompt() {
-    if (!preferences) return
-    const dismissals = Math.min(2, preferences.prompt_dismissals + 1)
-    await savePreferences({ prompt_dismissals: dismissals, prompt_reoffer_at: dismissals < 2 ? new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString() : null })
-  }
-
-  async function testNotification() {
-    if (!supabase || !isOnline) return
-    setPushBusy(true)
-    const { error: testError } = await supabase.functions.invoke('test-push', { body: {} })
-    setPushBusy(false)
-    if (testError) { setError(`Test notification failed · ${testError.message}`); return }
-    setError('')
-    setNotificationMessage('Test notification sent to your active devices.')
-  }
-
-  async function saveNotificationTimes() {
-    if (!settingsDraft.daily_nudge_time || !settingsDraft.quiet_hours_start || !settingsDraft.quiet_hours_end || settingsDraft.quiet_hours_start === settingsDraft.quiet_hours_end) {
-      setError('Choose a nudge time and quiet hours with different start and end times.')
-      return
-    }
-    await savePreferences({
-      daily_nudge_time: settingsDraft.daily_nudge_time,
-      quiet_hours_start: settingsDraft.quiet_hours_start,
-      quiet_hours_end: settingsDraft.quiet_hours_end,
-      weekly_summary_enabled: settingsDraft.weekly_summary_enabled,
-    })
-  }
-
-  async function removeSubscription(device: PushSubscriptionRow) {
-    if (!supabase || !isOnline) return
-    const registration = await navigator.serviceWorker.ready
-    const current = await registration.pushManager.getSubscription()
-    if (current?.endpoint === device.endpoint) await current.unsubscribe()
-    const { error: removeError } = await supabase.from('push_subscriptions').delete().eq('id', device.id)
-    if (removeError) { setError(`Device could not be removed · ${removeError.message}`); return }
-    await loadNotificationSettings()
-  }
-
   const handledNotificationAction = useRef(false)
   useEffect(() => {
     if (!signedIn || !supabase || handledNotificationAction.current) return
@@ -565,6 +310,12 @@ function App() {
     if (!action || !reminderId || !['open', 'done', 'hour', 'later', 'skip'].includes(action)) return
     handledNotificationAction.current = true
     void (async () => {
+      // A link can be typed by anyone; act only when it matches a real reminder of yours for that same task.
+      const reminder = await supabase!.from('task_reminders').select('id, task_id').eq('id', reminderId).maybeSingle()
+      if (reminder.error || !reminder.data || (taskId && reminder.data.task_id !== taskId)) {
+        dropParams(params, 'task_action', 'task_id', 'reminder_id')
+        return
+      }
       if (action === 'done' && taskId) {
         const result = await supabase!.from('tasks').select('*, labels(name)').eq('id', taskId).maybeSingle()
         if (result.error || !result.data) setError(`Task could not be completed · ${result.error?.message ?? 'Task not found.'}`)
@@ -581,11 +332,10 @@ function App() {
         }
       } else if (action === 'skip') {
         const skipped = localDateInput(new Date().toISOString())
-        await savePreferences({ skipped_until: skipped })
+        await settings.savePreferences({ skipped_until: skipped })
       }
       await supabase!.from('task_reminders').update({ action_at: new Date().toISOString(), action }).eq('id', reminderId)
-      params.delete('task_action'); params.delete('task_id'); params.delete('reminder_id')
-      window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`)
+      dropParams(params, 'task_action', 'task_id', 'reminder_id')
     })()
   }, [signedIn])
 
@@ -598,13 +348,12 @@ function App() {
       const url = params.get('url')?.trim() ?? ''
       const shared = [...new Set([title, text, url].filter(Boolean))].join(' ')
       if (shared) { composerRef.current?.setTitle(shared); openComposer() }
-      params.delete('share'); params.delete('title'); params.delete('text'); params.delete('url')
-      window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`)
+      dropParams(params, 'share', 'title', 'text', 'url')
     }
-    if (params.get('open') === 'inbox') { chooseView('Inbox'); params.delete('open'); window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`) }
+    if (params.get('open') === 'inbox') { chooseView('Inbox'); dropParams(params, 'open') }
     const quickDetailsId = params.get('quick_details')
-    if (quickDetailsId) { openTaskDetailsInInbox(quickDetailsId); params.delete('quick_details'); window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`) }
-    if (params.get('capture') === 'voice') { params.delete('capture'); window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`); setComposerOpen(true); window.setTimeout(() => composerRef.current?.startVoice(), 300) }
+    if (quickDetailsId) { openTaskDetailsInInbox(quickDetailsId); dropParams(params, 'quick_details') }
+    if (params.get('capture') === 'voice') { dropParams(params, 'capture'); setComposerOpen(true); window.setTimeout(() => composerRef.current?.startVoice(), 300) }
   }, [signedIn])
 
   async function updateTask(task: Task, values: Partial<Task>) {
@@ -624,7 +373,13 @@ function App() {
       }, 1200)
       inboxReleaseTimersRef.current.set(task.id, timer)
     }
-    if (values.reminder_offset && values.reminder_offset !== 'none' && !currentPushEndpoint) void setupPush(false)
+    if (values.reminder_offset && values.reminder_offset !== 'none' && !settings.currentPushEndpoint) void settings.setupPush(false)
+  }
+
+  async function moveAllToToday(list: Task[]) {
+    const before = list.map(task => [task, { due_at: task.due_at, due_is_approx: task.due_is_approx }] as const)
+    await Promise.all(list.map(task => updateTask(task, movedToToday(task))))
+    setToast({ text: `Moved ${list.length} to today`, undo: async () => { await Promise.all(before.map(([task, values]) => updateTask(task, values))) } })
   }
 
   async function releaseInboxTask(task: Task) {
@@ -635,18 +390,6 @@ function App() {
     if (!data) return
     setTasks(current => current.map(item => item.id === task.id ? data as Task : item))
     setQuickDetailsTaskId(current => current === task.id ? basicTasks.find(item => item.id !== task.id)?.id ?? null : current)
-  }
-
-  function setQuickTaskRepeat(value: string) {
-    if (!selectedQuickTask) return
-    const recurrence_rule = (value || null) as Task['recurrence_rule']
-    void updateTask(selectedQuickTask, {
-      recurrence_rule,
-      ...(recurrence_rule ? {
-        due_is_approx: false,
-        ...(!selectedQuickTask.due_at ? { due_at: withLocalTime(dateForChoice('today').due_at, '12:00') } : {}),
-      } : {}),
-    })
   }
 
   async function reopenTask(task: Task, knownNext?: Task | null) {
@@ -755,6 +498,15 @@ function App() {
     setTasks(current => current.map(item => item.id === task.id ? { ...item, deleted_at: null, updated_at: restoredAt } : item))
   }
 
+  async function purgeTask(task: Task) {
+    if (!supabase || !isOnline) return
+    if (!window.confirm(`Permanently delete "${task.title}"? This cannot be undone.`)) return
+    const { error: deleteError } = await supabase.from('tasks').delete().eq('id', task.id)
+    if (deleteError) { setError(`Could not delete task · ${deleteError.message}`); return }
+    setTasks(current => current.filter(item => item.id !== task.id))
+    setToast({ text: 'Task deleted for good' })
+  }
+
   async function clearDeletedTasks() {
     if (!supabase || !isOnline || !deletedTasks.length || clearDeletedBusy) return
     if (!window.confirm(`Permanently delete all ${deletedTasks.length} recently deleted ${deletedTasks.length === 1 ? 'task' : 'tasks'}? This cannot be undone.`)) return
@@ -808,10 +560,10 @@ function App() {
   const onRowRemove = useCallback((task: Task) => { void rowActionsRef.current.removeTask(task) }, [])
 
   function renderTaskRows(items: Task[], listName: string, emptyMessage = "Nothing here yet.", hideDate = false) {
-    return <section className="task-list" aria-label={listName + " tasks"}>
-      {!items.length && (tasksLoaded ? <p className="empty-state">{emptyMessage}</p> : <><span className="sr-only" role="status">Loading tasks</span><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/></>)}
-      {items.map(task => <TaskRow key={task.id} task={task} labels={labels} listName={listName} hideDate={hideDate} isOnline={isOnline} expanded={expanded === task.id} isNew={newTaskId === task.id} isCompleting={completingIds.has(task.id)} isSettling={settleIndexById.has(task.id)} settleIndex={settleIndexById.get(task.id) ?? 0} onToggleExpand={onToggleTaskExpand} onComplete={onRowComplete} onUpdate={onRowUpdate} onRemove={onRowRemove}/>)}
-    </section>
+    return <TaskList label={`${listName} tasks`} animate={settlingIds.length === 0}>
+      {!items.length && (tasksLoaded ? <p className="empty-state">{emptyMessage}</p> : <LoadingRows/>)}
+      {items.map(task => <TaskRow key={task.id} task={editLock?.id === task.id ? tasks.find(live => live.id === task.id) ?? task : task} labels={labels} listName={listName} hideDate={hideDate} isOnline={isOnline} expanded={expanded === task.id} isNew={newTaskId === task.id} isCompleting={completingIds.has(task.id)} isSettling={settleIndexById.has(task.id)} settleIndex={settleIndexById.get(task.id) ?? 0} onToggleExpand={onToggleTaskExpand} onComplete={onRowComplete} onUpdate={onRowUpdate} onRemove={onRowRemove}/>)}
+    </TaskList>
   }
 
   function renderWeekAgenda(source: Task[], omitThrough?: Date) {
@@ -821,7 +573,7 @@ function App() {
       tasks: source.filter(task => task.due_at && !task.due_is_approx && isSameLocalDay(new Date(task.due_at), day)),
     })).filter(group => (!omitThrough || group.day > omitThrough) && group.tasks.length > 0)
     const roughTasks = source.filter(task => task.due_at && task.due_is_approx && (!omitThrough || new Date(task.due_at) > omitThrough))
-    if (!exactGroups.length && !roughTasks.length) return tasksLoaded ? <p className="empty-state">No more tasks this week.</p> : <div className="week-agenda"><span className="sr-only" role="status">Loading tasks</span><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/></div>
+    if (!exactGroups.length && !roughTasks.length) return tasksLoaded ? <p className="empty-state">No more tasks this week.</p> : <div className="week-agenda"><LoadingRows/></div>
     return <div className="week-agenda">
       {exactGroups.map(group => <section className="week-day-group" key={group.day.toISOString()}><h3>{isSameLocalDay(group.day, new Date()) ? 'Today' : group.day.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</h3>{renderTaskRows(group.tasks, group.day.toLocaleDateString(undefined, { weekday: 'long' }), undefined, true)}</section>)}
       {roughTasks.length > 0 && <section className="week-day-group"><h3>Sometime this week</h3>{renderTaskRows(roughTasks, 'Sometime this week')}</section>}
@@ -829,7 +581,7 @@ function App() {
   }
 
   const taskCounts = useMemo(() => {
-    const counts: Record<View, number> = { Today: 0, Inbox: 0, 'This week': 0, Done: 0 }
+    const counts: Record<View, number> = { Today: 0, Inbox: 0, 'This week': 0, Missed: 0, Done: 0 }
     const perDay = new Map<string, number>()
     const today = startOfLocalDay(new Date())
     for (const task of tasks) {
@@ -841,15 +593,18 @@ function App() {
         const key = localDayKey(due)
         perDay.set(key, (perDay.get(key) ?? 0) + 1)
         if (due >= weekStart && due < weekEnd) counts['This week']++
-        if (isSameLocalDay(due, today) || isMissed(task)) counts.Today++
+        if (isSameLocalDay(due, today)) counts.Today++
+        else if (due < today) counts.Missed++
       }
     }
     return { counts, perDay }
   }, [tasks, weekStart, weekEnd])
   const viewCount = (tab: View) => taskCounts.counts[tab]
 
+  const errorBanner = error && <div className="error-banner" role="alert">{error}{(errorRetryable || settings.retryPushSetup !== null) && <button className="text-button" disabled={!isOnline || settings.pushBusy} onClick={() => settings.retryPushSetup === null ? void load() : void settings.setupPush(settings.retryPushSetup)}>Retry</button>}{!errorRetryable && settings.retryPushSetup === null && <button className="text-button" onClick={() => setError('')}>Dismiss</button>}</div>
   const todayLabel = selectedDay.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
   const pushConfigured = Boolean(import.meta.env.VITE_VAPID_PUBLIC_KEY)
+  const { preferences } = settings
   const showNotificationPrompt = Boolean(preferences && tasks.some(task => !task.deleted_at)
     && !preferences.daily_nudge_enabled && preferences.prompt_dismissals < 2
     && pushConfigured
@@ -857,7 +612,7 @@ function App() {
     && 'PushManager' in window
     && (!('Notification' in window) || Notification.permission !== 'denied'))
   // The side pane ranks what is not already on the Today view: other days, and Inbox when nothing else is dated.
-  const topTasks = rankCompanionTasks(tasks.filter(task => !task.deleted_at && task.status === 'open' && !missedIds.has(task.id) && !(task.due_at && !task.is_inbox && isSameLocalDay(new Date(task.due_at), selectedDay))), new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC').slice(0, 5).map(entry => entry.task)
+  const topTasks = useMemo(() => rankCompanionTasks(placedTasks.filter(task => !task.deleted_at && task.status === 'open' && !missedIds.has(task.id) && !(task.due_at && !task.is_inbox && isSameLocalDay(new Date(task.due_at), selectedDay))), new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC').slice(0, 5).map(entry => entry.task), [placedTasks, missedIds, selectedDay])
   async function installApp() {
     if (!installPrompt) return
     await installPrompt.prompt()
@@ -867,41 +622,31 @@ function App() {
 
   if (!isSupabaseConfigured) return <main className="setup-wrap"><section className="setup-card"><div className="brand-mark"><Check size={18} /></div><p className="eyebrow">A quiet place for your tasks</p><h1>Taskflow</h1><p>Add your Supabase project URL and public anon key to <code>.env</code>, run the migration, then restart the app.</p><p className="setup-hint">See <code>.env.example</code> and <code>supabase/migrations</code>.</p></section></main>
   if (!sessionReady) return <main className="setup-wrap"><p>Loading…</p></main>
-  if (!signedIn) return <AuthScreen onSignedIn={() => setSignedIn(true)} />
+  if (!signedIn || recovering) return <AuthScreen recovering={recovering} onSignedIn={() => { setRecovering(false); setSignedIn(true) }} />
 
   return <div className="app-shell">
-    <header className="topbar"><a className="brand" href="#" aria-label="Taskflow home"><span className="brand-mark"><Check size={16} /></span><span>Taskflow</span></a><div className="topbar-right">{installPrompt && <button className="text-button install-button" onClick={() => void installApp()}><Download size={15}/>Install app</button>}<span className="sync-state">{isOnline && syncStatus === 'Synced' && <span className="online-dot" />}{isOnline ? syncStatus : 'Offline'}</span><button className="text-button" aria-expanded={settingsOpen} onClick={() => { setSettingsOpen(open => !open); if (!settingsOpen) void loadNotificationSettings() }}>Settings</button><button className="text-button signout" onClick={() => supabase?.auth.signOut()}>Sign out</button></div></header>
+    <header className="topbar"><a className="brand" href="#" aria-label="Taskflow home"><span className="brand-mark"><Check size={16} /></span><span>Taskflow</span></a><div className="topbar-right">{installPrompt && <button className="text-button install-button" onClick={() => void installApp()}><Download size={15}/>Install app</button>}<span className="sync-state">{isOnline && syncStatus === 'Synced' && <span className="online-dot" />}{isOnline ? syncStatus : 'Offline'}</span><button className={`icon-button settings-button ${settingsOpen ? 'active' : ''}`} aria-label="Settings" aria-pressed={settingsOpen} title="Settings" onClick={() => settingsOpen ? setSettingsOpen(false) : openSettings()}><SettingsIcon size={19}/></button></div></header>
     {!isOnline && <div className="offline-banner" role="status">Offline · showing your last saved tasks. Reconnect to make changes.</div>}
     <div className="workspace">
-      <aside className="sidebar"><p className="nav-label">Your lists</p><nav aria-label="Task views">{tabs.map(tab => <button key={tab} className={`nav-item ${view === tab ? 'selected' : ''}`} aria-current={view === tab ? 'page' : undefined} onClick={() => chooseView(tab)}>{tab === 'Today' ? <Sun size={16}/> : tab === 'Inbox' ? <Inbox size={16}/> : tab === 'This week' ? <CalendarRange size={16}/> : <CircleCheck size={16}/>} {tab}<span className="nav-count">{viewCount(tab)}</span></button>)}</nav></aside>
+      <aside className="sidebar"><p className="nav-label">Your lists</p><nav aria-label="Task views">{tabs.map(tab => { const current = view === tab && !settingsOpen; const count = viewCount(tab); return <button key={tab} className={`nav-item nav-${TAB_SLUGS[tab]} ${current ? 'selected' : ''}`} aria-current={current ? 'page' : undefined} onClick={() => chooseView(tab)}><span className="nav-icon" aria-hidden="true">{TAB_ICONS[tab]}</span><span className="nav-text">{tab}</span>{count > 0 && <span className={`nav-count ${tab === 'Missed' ? 'is-alert' : ''}`}>{count}</span>}</button> })}</nav></aside>
       <main className="main-content">
         <div className={`content-inner ${view === 'Today' ? 'today-content' : ''}`}>
-          {settingsOpen && <section className="settings-panel" aria-label="Notification settings"><div className="settings-heading"><div><p className="eyebrow">A quieter way to stay on top</p><h2>Notifications</h2></div><button className="icon-button" aria-label="Close settings" onClick={() => setSettingsOpen(false)}><X size={17}/></button></div>
-            <p className="settings-copy">Taskflow only sends the daily nudge you choose and reminders you set on a task.</p>
-            {!pushConfigured && <p className="settings-copy" role="status">Notifications need the public push key configured before this app can enable them.</p>}
-            <div className="settings-grid"><label>Daily nudge time<input type="time" value={settingsDraft.daily_nudge_time.slice(0, 5)} onChange={e => setSettingsDraft(d => ({ ...d, daily_nudge_time: e.target.value }))}/></label><label>Quiet hours start<input type="time" value={settingsDraft.quiet_hours_start.slice(0, 5)} onChange={e => setSettingsDraft(d => ({ ...d, quiet_hours_start: e.target.value }))}/></label><label>Quiet hours end<input type="time" value={settingsDraft.quiet_hours_end.slice(0, 5)} onChange={e => setSettingsDraft(d => ({ ...d, quiet_hours_end: e.target.value }))}/></label></div>
-            <div className="settings-grid settings-motion"><label>Motion<select value={motionPref} onChange={e => { const pref = e.target.value as MotionPref; setMotionPref(pref); setMotionPrefState(pref) }}><option value="full">Full animations</option><option value="reduced">Reduced</option><option value="system">Follow system</option></select></label></div>
-            <label className="settings-check"><input type="checkbox" checked={settingsDraft.weekly_summary_enabled} onChange={e => setSettingsDraft(d => ({ ...d, weekly_summary_enabled: e.target.checked }))}/>Send a short summary on Sunday</label>
-            <div className="settings-actions"><button className="secondary-button" disabled={!isOnline || !preferences} onClick={() => void saveNotificationTimes()}>Save times</button><button className="secondary-button" disabled={!isOnline} onClick={() => void exportBackup()}>Export data</button><label className="secondary-button backup-import">Restore backup<input type="file" accept="application/json,.json" disabled={!isOnline} onChange={e => { void restoreBackup(e.target.files?.[0]); e.currentTarget.value = '' }}/></label>{preferences?.daily_nudge_enabled && devicePushStateChecked && !currentPushEndpoint && <button className="primary-button" disabled={!isOnline || !pushConfigured || pushBusy} onClick={() => void enableNotifications()}>{pushBusy ? 'Setting up…' : 'Set up this device'}</button>}{preferences?.daily_nudge_enabled ? <button className="secondary-button" disabled={!isOnline} onClick={() => void savePreferences({ daily_nudge_enabled: false, prompt_dismissals: 2 })}>Turn off daily nudge</button> : <button className="primary-button" disabled={!isOnline || !pushConfigured || pushBusy} onClick={() => void enableNotifications()}>{pushBusy ? 'Setting up…' : 'Turn on daily nudge'}</button>}{preferences?.daily_nudge_enabled && <button className="secondary-button" disabled={!isOnline || !pushConfigured || pushBusy} onClick={() => void testNotification()}>{pushBusy ? 'Sending…' : 'Send test notification'}</button>}</div>
-            <div className="settings-devices"><strong>Devices receiving notifications</strong>{pushSubscriptions.length ? pushSubscriptions.map((device, index) => <div className="settings-device-row" key={device.id}><span>{currentPushEndpoint === device.endpoint ? 'This device' : `Other device ${index + 1}`}</span><button className="text-button" disabled={!isOnline} onClick={() => void removeSubscription(device)}>Remove</button></div>) : <p className="settings-copy">No devices are set up yet.</p>}</div>
-            {notificationMessage && <p className="settings-copy" role="status">{notificationMessage}</p>}
-            <p className="settings-copy settings-version">Version {__APP_VERSION__.replace(/\.0$/, '')}</p>
-          </section>}
-          {showNotificationPrompt && <aside className="nudge-offer" aria-label="Daily nudge setup"><span>Want a daily nudge so nothing slips?</span><div><button className="primary-button" disabled={!isOnline || pushBusy} onClick={() => void enableNotifications()}>{pushBusy ? 'Setting up…' : 'Yes'}</button><button className="text-button" disabled={!isOnline} onClick={() => void deferNotificationPrompt()}>Not now</button></div></aside>}
+          {settingsOpen ? <>{errorBanner}<SettingsPage settings={settings} isOnline={isOnline} pushConfigured={pushConfigured} email={userEmail} motionPref={motionPref} onMotionPref={pref => { setMotionPref(pref); setMotionPrefState(pref) }} onExport={() => void exportData()} onRestore={file => void restoreData(file)} onSignOut={everywhere => void supabase?.auth.signOut({ scope: everywhere ? 'global' : 'local' })} onClose={() => setSettingsOpen(false)}/></> : <>
+          {showNotificationPrompt && <aside className="nudge-offer" aria-label="Daily nudge setup"><span>Want a daily nudge so nothing slips?</span><div><button className="primary-button" disabled={!isOnline || settings.pushBusy} onClick={() => void settings.enableNotifications()}>{settings.pushBusy ? 'Setting up…' : 'Yes'}</button><button className="text-button" disabled={!isOnline} onClick={() => void settings.deferNotificationPrompt()}>Not now</button></div></aside>}
           {view === 'Today' ? <h1 className="sr-only">{todayLabel}</h1> : <div className="page-heading"><h1>{view}</h1>{view === 'This week' && <span className="list-caption">{weekStart.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – {addLocalDays(weekStart, 6).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>}</div>}
           <button type="button" className="add-fab" aria-label="Add a task" onClick={openComposer}><Plus size={18}/>Add task</button>
           {composerOpen && <button type="button" className="composer-scrim" aria-label="Close add task" tabIndex={-1} onClick={() => setComposerOpen(false)}/>}
           <Composer ref={composerRef} open={composerOpen} labels={labels} isOnline={isOnline} busy={busy} onSubmit={async (title, draft) => { const saved = await addTask(title, draft); if (saved) setComposerOpen(false); return saved }} onCreateLabel={createLabel} onRenameLabel={renameLabel} onDeleteLabel={deleteLabel}/>
-          {error && <div className="error-banner" role="alert">{error}{(errorRetryable || retryPushSetup !== null) && <button className="text-button" disabled={!isOnline || pushBusy} onClick={() => retryPushSetup === null ? void load() : void setupPush(retryPushSetup)}>Retry</button>}{!errorRetryable && retryPushSetup === null && <button className="text-button" onClick={() => setError('')}>Dismiss</button>}</div>}
-          <div key={view} className="view-enter">
+          {errorBanner}
+          <div key={view} className="view-enter" style={{ '--enter-x': `${enterFrom * 14}px` } as CSSProperties}>
           {view === 'Today' && <section className="day-strip" aria-label="Choose a day">{todayDays.map(day => {
             const count = taskCounts.perDay.get(localDayKey(day)) ?? 0
             return <button type="button" key={day.toISOString()} className={`day-strip-item ${isSameLocalDay(day, selectedDay) ? 'selected' : ''}`} aria-pressed={isSameLocalDay(day, selectedDay)} onClick={() => selectDay(day)}><span>{isSameLocalDay(day, new Date()) ? 'Today' : day.toLocaleDateString(undefined, { weekday: 'short' })}</span><strong>{day.getDate()}</strong><span className="day-strip-count">{count || ' '}</span></button>
           })}</section>}
+          {view === 'Today' && showMissedReminder && <aside className="missed-reminder" aria-label="Missed tasks"><CalendarX size={15} aria-hidden="true"/><span>{missedTasks.length} missed {missedTasks.length === 1 ? 'task' : 'tasks'}</span><button className="text-button" onClick={() => chooseView('Missed')}>Review</button><button className="icon-button" aria-label="Dismiss for today" onClick={dismissMissedReminder}><X size={15}/></button></aside>}
           {view === 'Today' && <div className="today-split">
             {basicTasks.length > 0 && <aside className="quick-details-prompt"><span>{basicTasks.length} {basicTasks.length === 1 ? 'Inbox task could' : 'Inbox tasks could'} use more details.</span><button className="secondary-button" onClick={() => openTaskDetailsInInbox(basicTasks[0].id)}>Open Inbox</button></aside>}
-            {selectedQuickTask && <section className="quick-details-card" aria-label="Quick details"><p className="eyebrow">Edit Inbox task</p><h2>{selectedQuickTask.title}</h2><label className="description-field">Description<textarea aria-label="Description" maxLength={5000} disabled={!isOnline} value={quickDescription} placeholder="Add helpful context…" onChange={e => setQuickDescription(e.target.value)} onBlur={() => { const description = quickDescription.trim(); if (description !== (selectedQuickTask.description ?? "")) void updateTask(selectedQuickTask, { description }) }}/></label>{selectedQuickTask.due_at && selectedQuickTask.due_is_approx && <div className="chip-row"><span className="chip-group-label">Choose a day</span>{Array.from({ length: 7 }, (_, index) => addLocalDays(startOfLocalWeek(new Date(selectedQuickTask.due_at!)), index)).filter(day => day >= startOfLocalDay(new Date())).map(day => <button key={day.toISOString()} className="choice-chip" onClick={() => void updateTask(selectedQuickTask, { due_at: new Date(day.getFullYear(), day.getMonth(), day.getDate(), 12).toISOString(), due_is_approx: false })}>{day.toLocaleDateString(undefined, { weekday: 'short' })} {day.getDate()}</button>)}</div>}
-              <div className="chip-row"><label className="choice-chip date-chip"><CalendarDays size={14}/><span>When</span><input aria-label="When" type="date" value={localDateInput(selectedQuickTask.due_at)} onChange={e => void updateTask(selectedQuickTask, { due_at: e.target.value ? new Date(`${e.target.value}T12:00:00`).toISOString() : null, due_is_approx: false, recurrence_rule: e.target.value ? selectedQuickTask.recurrence_rule : null })}/></label><TimePicker label="Due time" value={selectedQuickTask.is_all_day ? '' : localTimeInput(selectedQuickTask.due_at)} onChange={time => void updateTask(selectedQuickTask, { ...(time ? { due_at: withLocalTime(selectedQuickTask.due_at, time) } : {}), due_is_approx: false, is_all_day: !time })}/><label className="select-chip"><span>Repeat</span><select aria-label="Repeat" title="Never means this task will not repeat." value={selectedQuickTask.recurrence_rule ?? ""} onChange={e => setQuickTaskRepeat(e.target.value)}><option value="">Never</option><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label><ReminderPicker offset={selectedQuickTask.reminder_offset} minutes={selectedQuickTask.reminder_minutes} disabled={!isOnline || !selectedQuickTask.due_at || selectedQuickTask.due_is_approx} onChange={values => void updateTask(selectedQuickTask, values)}/><label className="select-chip"><span>Size</span><select aria-label="Size" value={selectedQuickTask.size ?? ''} onChange={e => void updateTask(selectedQuickTask, { size: (e.target.value || null) as Task['size'] })}><option value="">Not set</option><option value="quick">Quick</option><option value="hour">An hour</option><option value="big">Big</option></select></label><button className={`choice-chip ${selectedQuickTask.is_important ? 'starred' : ''}`} aria-pressed={selectedQuickTask.is_important} onClick={() => void updateTask(selectedQuickTask, { is_important: !selectedQuickTask.is_important })}><Star size={15}/>Important</button><label className="select-chip"><span>Label</span><select aria-label="Label" value={selectedQuickTask.label_id ?? ''} onChange={e => void updateTask(selectedQuickTask, { label_id: e.target.value || null })}><option value="">None</option>{labels.map(label => <option key={label.id} value={label.id}>{label.name}</option>)}</select></label></div><div className="quick-details-actions"><button className="text-button" onClick={() => void finishQuickDetails(true)}>Skip</button><button className="primary-button" onClick={() => void finishQuickDetails(false)}>Done</button></div></section>}
+            {selectedQuickTask && <QuickDetailsCard key={selectedQuickTask.id} task={selectedQuickTask} labels={labels} isOnline={isOnline} onUpdate={onRowUpdate} onFinish={skip => void finishQuickDetails(skip)}/>}
             <section className="day-pane">
               {timedTodayTasks.length > 0 && <section className="schedule">
                 <h3 className="lane-heading">Schedule</h3>
@@ -914,21 +659,22 @@ function App() {
                 {allClear ? <div className="all-clear" role="status"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M20 6 9 17l-5-5"/></svg><p>All clear for today.</p></div>
                   : renderTaskRows(anytimeTasks, `Anytime on ${todayLabel}`, timedTodayTasks.length ? 'No other tasks for this day.' : 'Nothing is planned for this day.', true)}
               </section>}
-              {missedTasks.length > 0 && <section className="missed-list"><h3>Missed</h3>{renderTaskRows(missedTasks, 'Missed tasks')}</section>}
             </section>
-            <aside className="week-pane"><div className="pane-heading"><div><p className="eyebrow">Up next</p><h2>Top 5</h2></div><button className="text-button pane-link" onClick={() => chooseView('This week')}>Open week</button></div>{renderTaskRows(topTasks, 'Top 5', 'Nothing else coming up.')}</aside>
+            <aside className="week-pane"><div className="pane-heading"><h2>Up next</h2><button className="text-button pane-link" onClick={() => chooseView('This week')}>Open week</button></div>{renderTaskRows(topTasks, 'Up next', 'Nothing else coming up.')}</aside>
           </div>}
+          {view === 'Missed' && <section className="missed-view">{missedTasks.length > 1 && <div className="missed-actions"><span>Oldest first</span><button className="secondary-button" disabled={!isOnline} onClick={() => void moveAllToToday(missedTasks)}><CalendarCheck size={15}/>Move all to today</button></div>}{renderTaskRows(missedTasks, 'Missed', 'Nothing missed. You are all caught up.')}</section>}
           {view === 'This week' && <section className="week-view">{renderWeekAgenda(visibleTasks)}{afterWeekTasks.length > 0 && <section className="week-day-group after-week"><h3>Later</h3>{renderTaskRows(afterWeekTasks, 'Later')}</section>}</section>}
           {view === 'Inbox' && basicTasks.length > 0 && <aside className="quick-details-prompt details-inbox-prompt"><span>{basicTasks.length} {basicTasks.length === 1 ? 'task could' : 'tasks could'} use more details.</span><button className="secondary-button" onClick={() => openTaskDetailsInInbox(basicTasks[0].id)}>Add details</button></aside>}
           {view === 'Inbox' && pinnedTask && !visibleTasks.some(task => task.id === pinnedTask.id) && <section className="pinned-edit" aria-label="Task from your schedule"><div className="pinned-edit-head"><h3>From your schedule</h3><button className="text-button" onClick={() => chooseView('Today')}>Back to Today</button></div>{renderTaskRows([pinnedTask], 'From your schedule')}</section>}
           {(view === 'Inbox' || view === 'Done') && renderTaskRows(visibleTasks, view)}
-          {view === 'Done' && <section className="removed-section"><div className="removed-heading"><h2><ArchiveRestore size={17}/>Recently removed</h2>{deletedTasks.length > 0 && <button className="secondary-button" disabled={!isOnline || clearDeletedBusy} onClick={() => void clearDeletedTasks()}>{clearDeletedBusy ? 'Clearing…' : 'Clear all'}</button>}</div>{deletedTasks.length ? deletedTasks.map(task => <div className="removed-row" key={task.id}><span>{task.title}</span><button className="secondary-button" disabled={!isOnline} onClick={() => void restoreTask(task)}><RotateCcw size={14}/>Restore</button></div>) : tasksLoaded ? <p className="removed-empty">Removed tasks can be restored here.</p> : <><span className="sr-only" role="status">Loading tasks</span><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/><div className="skeleton-row" aria-hidden="true"/></>}</section>}
+          {view === 'Done' && <RemovedSection tasks={deletedTasks} loaded={tasksLoaded} isOnline={isOnline} clearing={clearDeletedBusy} onRestore={task => void restoreTask(task)} onPurge={task => void purgeTask(task)} onClearAll={() => void clearDeletedTasks()}/>}
           </div>
+          </>}
         </div>
       </main>
     </div>
     {toast && <div className={`toast ${toast.compact ? 'toast-compact' : ''} ${toastClosing ? 'toast-closing' : ''}`} role="status"><span>{toast.text}</span>{toast.action && <button onClick={() => { toast.action?.run(); setToast(null) }}>{toast.action.label}</button>}{toast.undo && <button disabled={!isOnline} onClick={() => { void toast.undo?.(); setToast(null) }}>Undo</button>}</div>}
-    <nav className="mobile-tabs" aria-label="Task views">{tabs.map(tab => <button key={tab} className={view === tab ? 'active' : ''} aria-current={view === tab ? 'page' : undefined} onClick={() => chooseView(tab)}>{tab === 'Today' ? <Sun size={16}/> : tab === 'Inbox' ? <Inbox size={16}/> : tab === 'This week' ? <CalendarRange size={16}/> : <CircleCheck size={16}/>} {tab}</button>)}</nav>
+    <nav className="mobile-tabs" aria-label="Task views">{tabs.map(tab => { const current = view === tab && !settingsOpen; const alert = tab === 'Missed' ? viewCount(tab) : 0; return <button key={tab} className={`nav-${TAB_SLUGS[tab]} ${current ? 'active' : ''}`} aria-current={current ? 'page' : undefined} aria-label={alert ? `${tab}, ${alert} tasks` : undefined} onClick={() => chooseView(tab)}><span className="tab-icon" aria-hidden="true">{TAB_ICONS[tab]}{alert > 0 && <span className="tab-badge">{alert > 99 ? '99+' : alert}</span>}</span><span className="tab-label">{tab}</span></button> })}</nav>
   </div>
 }
 

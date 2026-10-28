@@ -29,7 +29,7 @@ export default function DevPanel() {
     if (!supabase) { setMessage('Supabase is not configured.'); return }
     const { data: userData, error: userError } = await supabase.auth.getUser()
     if (userError || !userData.user) { setMessage('Sign in before seeding tasks.'); return }
-    const { error } = await supabase.from('tasks').insert(buildSeedTasks(new Date()).map(task => ({ ...task, user_id: userData.user!.id })))
+    const { error } = await supabase.from('tasks').insert(buildSeedTasks(new Date()).map(task => ({ ...task, user_id: userData.user!.id })), { defaultToNull: false })
     setMessage(error ? `Seed failed: ${error.message}` : 'Sample tasks added.')
   }
 

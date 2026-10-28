@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Task } from './supabase'
-import { isRecentDuplicate, preferNewer } from './taskRules'
+import { isRecentDuplicate, mergeFetched, preferNewer } from './taskRules'
 
 const NOW = Date.parse('2026-10-25T12:00:00.000Z')
 const DUE = '2026-10-26T09:00:00.000Z'
@@ -74,5 +74,31 @@ describe('preferNewer', () => {
     const result = preferNewer([c, a, b], new Map([['b', localB]]))
     expect(result.map(row => row.id)).toEqual(['c', 'a', 'b'])
     expect(result[2]).toBe(localB)
+  })
+})
+
+describe('mergeFetched', () => {
+  const stamp = '2026-10-25T10:00:00.000Z'
+
+  it('returns the current array when a fetch changes nothing, so the list does not re-render', () => {
+    const current = [task('a', { updated_at: stamp }), task('b', { updated_at: stamp })]
+    const fetched = current.map(row => ({ ...row }))
+    expect(mergeFetched(fetched, current, new Map())).toBe(current)
+  })
+
+  it('keeps unchanged rows as the same objects and replaces changed ones', () => {
+    const a = task('a', { updated_at: stamp })
+    const b = task('b', { updated_at: stamp })
+    const changedB = task('b', { title: 'renamed', updated_at: '2026-10-25T11:00:00.000Z' })
+    const result = mergeFetched([{ ...a }, changedB], [a, b], new Map())
+    expect(result[0]).toBe(a)
+    expect(result[1]).toBe(changedB)
+  })
+
+  it('keeps a pending completion local and hides its next occurrence until it settles', () => {
+    const done = task('a', { updated_at: stamp })
+    const next = task('n', { updated_at: stamp })
+    const result = mergeFetched([{ ...done, status: 'completed' }, next], [done], new Map([['a', { nextTask: next }]]))
+    expect(result).toEqual([done])
   })
 })
