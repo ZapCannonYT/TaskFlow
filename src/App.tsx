@@ -1,6 +1,6 @@
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { CalendarCheck, CalendarRange, CalendarX, Check, CircleCheck, Download, Inbox, Plus, Sun, X } from 'lucide-react'
+import { CalendarCheck, CalendarRange, CalendarX, Check, CircleCheck, Download, Inbox, Plus, Settings as SettingsIcon, Sun, X } from 'lucide-react'
 import { isSupabaseConfigured, Label, supabase, Task } from './lib/supabase'
 import { localDayKey, addLocalDays, classifyView, dateForChoice, getSevenDays, isDueOnDay, isMissed, isSameLocalDay, movedToToday, localDateInput, rankOneThing, startOfLocalDay } from './lib/dates'
 import { isBasicTask, needsDetailsPrompt } from './lib/quickDetails'
@@ -14,7 +14,7 @@ import { AuthScreen } from './components/AuthScreen'
 import { LoadingRows } from './components/LoadingRows'
 import { QuickDetailsCard } from './components/QuickDetailsCard'
 import { RemovedSection } from './components/RemovedSection'
-import { SettingsPanel } from './features/settings/SettingsPanel'
+import { SettingsPage } from './features/settings/SettingsPage'
 import { useNotificationSettings } from './features/settings/useNotificationSettings'
 import { useTaskSync, type PendingCompletion } from './features/tasks/useTaskSync'
 import { useVisualViewport } from './lib/useVisualViewport'
@@ -44,9 +44,12 @@ function App() {
   useVisualViewport()
   const [sessionReady, setSessionReady] = useState(!isSupabaseConfigured)
   const [signedIn, setSignedIn] = useState(false)
+  // Following a password reset link signs in with a recovery session; ask for the new password before the app opens.
+  const [recovering, setRecovering] = useState(false)
   const [view, setViewState] = useState<View>('Today')
   const [selectedDay, setSelectedDay] = useState(() => startOfLocalDay(new Date()))
   const [userId, setUserId] = useState<string | null>(null)
+  const [userEmail, setUserEmail] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [toast, setToast] = useState<{ text: string; compact?: boolean; undo?: () => Promise<void>; action?: { label: string; run: () => void } } | null>(null)
@@ -114,9 +117,11 @@ function App() {
 
   useEffect(() => {
     if (!supabase) return
-    supabase.auth.getSession().then(({ data }) => { setSignedIn(Boolean(data.session)); setUserId(data.session?.user.id ?? null); setSessionReady(true) })
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSignedIn(Boolean(session)); setUserId(session?.user.id ?? null)
+    supabase.auth.getSession().then(({ data }) => { setSignedIn(Boolean(data.session)); setUserId(data.session?.user.id ?? null); setUserEmail(data.session?.user.email ?? null); setSessionReady(true) })
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') setRecovering(true)
+      setSignedIn(Boolean(session)); setUserId(session?.user.id ?? null); setUserEmail(session?.user.email ?? null)
+      if (!session) setSettingsOpen(false)
       if (!session) {
         try { Object.keys(localStorage).filter(key => key.startsWith('taskflow:snapshot:')).forEach(key => localStorage.removeItem(key)) }
         catch { /* local snapshots are optional */ }
@@ -142,7 +147,7 @@ function App() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { setExpanded(null); setComposerOpen(false); return }
+      if (event.key === 'Escape') { setExpanded(null); setComposerOpen(false); setSettingsOpen(false); return }
       if (!(event.key === '/' || event.key.toLowerCase() === 'n' || event.key.toLowerCase() === 'c') || event.ctrlKey || event.metaKey || event.altKey) return
       const active = document.activeElement
       if (active instanceof HTMLElement && (active.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName))) return
@@ -191,7 +196,17 @@ function App() {
   const basicTasks = useMemo(() => tasks.filter(task => classifyView(task) === 'Inbox' && needsDetailsPrompt(task)), [tasks])
   const selectedQuickTask = quickDetailsTaskId ? tasks.find(task => task.id === quickDetailsTaskId && task.status === 'open' && !task.deleted_at && task.is_inbox && !task.details_prompted_at) : undefined
 
+  function openSettings() {
+    commitCompletions()
+    setExpanded(null)
+    setComposerOpen(false)
+    setSettingsOpen(true)
+    void settings.loadNotificationSettings()
+    window.scrollTo({ top: 0 })
+  }
+
   function chooseView(nextView: View) {
+    setSettingsOpen(false)
     commitCompletions()
     setPinnedEditId(null)
     if (nextView === 'Today') setSelectedDay(startOfLocalDay(new Date()))
@@ -573,6 +588,7 @@ function App() {
   }, [tasks, weekStart, weekEnd])
   const viewCount = (tab: View) => taskCounts.counts[tab]
 
+  const errorBanner = error && <div className="error-banner" role="alert">{error}{(errorRetryable || settings.retryPushSetup !== null) && <button className="text-button" disabled={!isOnline || settings.pushBusy} onClick={() => settings.retryPushSetup === null ? void load() : void settings.setupPush(settings.retryPushSetup)}>Retry</button>}{!errorRetryable && settings.retryPushSetup === null && <button className="text-button" onClick={() => setError('')}>Dismiss</button>}</div>
   const todayLabel = selectedDay.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
   const pushConfigured = Boolean(import.meta.env.VITE_VAPID_PUBLIC_KEY)
   const { preferences } = settings
@@ -593,22 +609,22 @@ function App() {
 
   if (!isSupabaseConfigured) return <main className="setup-wrap"><section className="setup-card"><div className="brand-mark"><Check size={18} /></div><p className="eyebrow">A quiet place for your tasks</p><h1>Taskflow</h1><p>Add your Supabase project URL and public anon key to <code>.env</code>, run the migration, then restart the app.</p><p className="setup-hint">See <code>.env.example</code> and <code>supabase/migrations</code>.</p></section></main>
   if (!sessionReady) return <main className="setup-wrap"><p>Loading…</p></main>
-  if (!signedIn) return <AuthScreen onSignedIn={() => setSignedIn(true)} />
+  if (!signedIn || recovering) return <AuthScreen recovering={recovering} onSignedIn={() => { setRecovering(false); setSignedIn(true) }} />
 
   return <div className="app-shell">
-    <header className="topbar"><a className="brand" href="#" aria-label="Taskflow home"><span className="brand-mark"><Check size={16} /></span><span>Taskflow</span></a><div className="topbar-right">{installPrompt && <button className="text-button install-button" onClick={() => void installApp()}><Download size={15}/>Install app</button>}<span className="sync-state">{isOnline && syncStatus === 'Synced' && <span className="online-dot" />}{isOnline ? syncStatus : 'Offline'}</span><button className="text-button" aria-expanded={settingsOpen} onClick={() => { setSettingsOpen(open => !open); if (!settingsOpen) void settings.loadNotificationSettings() }}>Settings</button><button className="text-button signout" onClick={() => supabase?.auth.signOut()}>Sign out</button></div></header>
+    <header className="topbar"><a className="brand" href="#" aria-label="Taskflow home"><span className="brand-mark"><Check size={16} /></span><span>Taskflow</span></a><div className="topbar-right">{installPrompt && <button className="text-button install-button" onClick={() => void installApp()}><Download size={15}/>Install app</button>}<span className="sync-state">{isOnline && syncStatus === 'Synced' && <span className="online-dot" />}{isOnline ? syncStatus : 'Offline'}</span><button className={`icon-button settings-button ${settingsOpen ? 'active' : ''}`} aria-label="Settings" aria-pressed={settingsOpen} title="Settings" onClick={() => settingsOpen ? setSettingsOpen(false) : openSettings()}><SettingsIcon size={19}/></button></div></header>
     {!isOnline && <div className="offline-banner" role="status">Offline · showing your last saved tasks. Reconnect to make changes.</div>}
     <div className="workspace">
       <aside className="sidebar"><p className="nav-label">Your lists</p><nav aria-label="Task views">{tabs.map(tab => <button key={tab} className={`nav-item ${view === tab ? 'selected' : ''}`} aria-current={view === tab ? 'page' : undefined} onClick={() => chooseView(tab)}>{TAB_ICONS[tab]} {tab}<span className="nav-count">{viewCount(tab)}</span></button>)}</nav></aside>
       <main className="main-content">
         <div className={`content-inner ${view === 'Today' ? 'today-content' : ''}`}>
-          {settingsOpen && <SettingsPanel settings={settings} isOnline={isOnline} pushConfigured={pushConfigured} motionPref={motionPref} onMotionPref={pref => { setMotionPref(pref); setMotionPrefState(pref) }} onExport={() => void exportData()} onRestore={file => void restoreData(file)} onClose={() => setSettingsOpen(false)}/>}
+          {settingsOpen ? <>{errorBanner}<SettingsPage settings={settings} isOnline={isOnline} pushConfigured={pushConfigured} email={userEmail} motionPref={motionPref} onMotionPref={pref => { setMotionPref(pref); setMotionPrefState(pref) }} onExport={() => void exportData()} onRestore={file => void restoreData(file)} onSignOut={() => void supabase?.auth.signOut()} onClose={() => setSettingsOpen(false)}/></> : <>
           {showNotificationPrompt && <aside className="nudge-offer" aria-label="Daily nudge setup"><span>Want a daily nudge so nothing slips?</span><div><button className="primary-button" disabled={!isOnline || settings.pushBusy} onClick={() => void settings.enableNotifications()}>{settings.pushBusy ? 'Setting up…' : 'Yes'}</button><button className="text-button" disabled={!isOnline} onClick={() => void settings.deferNotificationPrompt()}>Not now</button></div></aside>}
           {view === 'Today' ? <h1 className="sr-only">{todayLabel}</h1> : <div className="page-heading"><h1>{view}</h1>{view === 'This week' && <span className="list-caption">{weekStart.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – {addLocalDays(weekStart, 6).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>}</div>}
           <button type="button" className="add-fab" aria-label="Add a task" onClick={openComposer}><Plus size={18}/>Add task</button>
           {composerOpen && <button type="button" className="composer-scrim" aria-label="Close add task" tabIndex={-1} onClick={() => setComposerOpen(false)}/>}
           <Composer ref={composerRef} open={composerOpen} labels={labels} isOnline={isOnline} busy={busy} onSubmit={async (title, draft) => { const saved = await addTask(title, draft); if (saved) setComposerOpen(false); return saved }} onCreateLabel={createLabel} onRenameLabel={renameLabel} onDeleteLabel={deleteLabel}/>
-          {error && <div className="error-banner" role="alert">{error}{(errorRetryable || settings.retryPushSetup !== null) && <button className="text-button" disabled={!isOnline || settings.pushBusy} onClick={() => settings.retryPushSetup === null ? void load() : void settings.setupPush(settings.retryPushSetup)}>Retry</button>}{!errorRetryable && settings.retryPushSetup === null && <button className="text-button" onClick={() => setError('')}>Dismiss</button>}</div>}
+          {errorBanner}
           <div key={view} className="view-enter">
           {view === 'Today' && <section className="day-strip" aria-label="Choose a day">{todayDays.map(day => {
             const count = taskCounts.perDay.get(localDayKey(day)) ?? 0
@@ -640,6 +656,7 @@ function App() {
           {(view === 'Inbox' || view === 'Done') && renderTaskRows(visibleTasks, view)}
           {view === 'Done' && <RemovedSection tasks={deletedTasks} loaded={tasksLoaded} isOnline={isOnline} clearing={clearDeletedBusy} onRestore={task => void restoreTask(task)} onPurge={task => void purgeTask(task)} onClearAll={() => void clearDeletedTasks()}/>}
           </div>
+          </>}
         </div>
       </main>
     </div>
