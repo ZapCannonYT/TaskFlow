@@ -72,11 +72,17 @@ export function rankOneThing<T extends {
   })
 }
 
-export function localDateInput(value: string | null) {
+export function localDateInput(value: string | Date | null) {
   if (!value) return ''
   const date = new Date(value)
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
+
+/** Local `YYYY-MM-DD`, used both for date inputs and as a per-day map key. */
+export const localDayKey = (date: Date) => localDateInput(date)
+
+/** A date input's `YYYY-MM-DD` as midday local time, so time-zone shifts never move it to another day. */
+export const middayOf = (dateInput: string) => new Date(`${dateInput}T12:00:00`).toISOString()
 
 export function localTimeInput(value: string | null) {
   if (!value) return ''

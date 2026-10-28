@@ -1,7 +1,8 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { CalendarDays, Mic, MicOff, Plus, Repeat, Star, Trash2, X } from 'lucide-react'
 import type { Label, Task } from '../lib/supabase'
-import { dateForChoice, type WhenChoice } from '../lib/dates'
+import { dateForChoice, localDateInput, localTimeInput, middayOf, withLocalTime, type WhenChoice } from '../lib/dates'
+import { REPEAT_OPTIONS, SIZE_OPTIONS } from '../lib/taskOptions'
 import { parseNaturalTask } from '../lib/naturalTime'
 import { isBasicTask } from '../lib/quickDetails'
 import { useVoiceCapture } from '../features/voice/useVoiceCapture'
@@ -24,28 +25,12 @@ export type ComposerProps = {
 }
 const blankDetails = (): DraftDetails => ({ due_at: null, due_is_approx: false, is_all_day: true, size: null, is_important: false, label_id: null, recurrence_rule: null, description: '', reminder_offset: '1_hour_before', reminder_minutes: null, color: null, is_inbox: true })
 const WHEN_CHOICES: ReadonlyArray<readonly [WhenChoice, string]> = [['today', 'Today'], ['tomorrow', 'Tomorrow'], ['weekend', 'This weekend'], ['next-week', 'Next week']]
-function dateInput(value: string | null) {
-  if (!value) return ''
-  const date = new Date(value)
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-}
-function timeInput(value: string | null) {
-  if (!value) return ''
-  const date = new Date(value)
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-}
-function withTime(value: string | null, time: string) {
-  const date = value ? new Date(value) : new Date(dateForChoice('today').due_at!)
-  const [hours, minutes] = time.split(':').map(Number)
-  date.setHours(hours, minutes, 0, 0)
-  return date.toISOString()
-}
 /** Which preset (if any) the draft's date matches, so the When select can show it. */
 function whenValue(draft: DraftDetails): string {
   if (!draft.due_at) return ''
   const preset = WHEN_CHOICES.find(([key]) => {
     const choice = dateForChoice(key)
-    return Boolean(choice.due_is_approx) === draft.due_is_approx && dateInput(choice.due_at) === dateInput(draft.due_at)
+    return Boolean(choice.due_is_approx) === draft.due_is_approx && localDateInput(choice.due_at) === localDateInput(draft.due_at)
   })
   return preset ? preset[0] : 'date'
 }
@@ -98,13 +83,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (!value) { setDraft(current => ({ ...current, due_at: null, due_is_approx: false, is_all_day: true, recurrence_rule: null })); return }
     const choice = dateForChoice(value as WhenChoice)
     // Keep a chosen time when moving the task to another day.
-    setDraft(current => ({ ...current, ...choice, due_at: hasTime && !choice.due_is_approx ? withTime(choice.due_at, timeInput(current.due_at)) : choice.due_at, is_all_day: choice.due_is_approx ? true : current.is_all_day }))
+    setDraft(current => ({ ...current, ...choice, due_at: hasTime && !choice.due_is_approx ? withLocalTime(choice.due_at, localTimeInput(current.due_at)) : choice.due_at, is_all_day: choice.due_is_approx ? true : current.is_all_day }))
   }
   function setRecurrence(rule: Task['recurrence_rule']) {
     setDraft(current => ({
       ...current,
       recurrence_rule: rule ?? null,
-      due_at: rule && !current.due_at ? withTime(dateForChoice('today').due_at, '12:00') : current.due_at,
+      due_at: rule && !current.due_at ? withLocalTime(dateForChoice('today').due_at, '12:00') : current.due_at,
       due_is_approx: rule ? false : current.due_is_approx,
     }))
   }
@@ -130,15 +115,15 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             {WHEN_CHOICES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
             <option value="date">{when === 'date' && draft.due_at ? new Date(draft.due_at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : 'Pick a date…'}</option>
           </select>
-          <input ref={dateRef} className="when-date-input" aria-label="Pick a date" tabIndex={-1} type="date" disabled={!isOnline} value={dateInput(draft.due_at)} onChange={event => setDraft(current => ({ ...current, due_at: event.target.value ? withTime(new Date(`${event.target.value}T12:00:00`).toISOString(), timeInput(current.due_at) || '12:00') : null, due_is_approx: false, recurrence_rule: event.target.value ? current.recurrence_rule : null }))}/>
+          <input ref={dateRef} className="when-date-input" aria-label="Pick a date" tabIndex={-1} type="date" disabled={!isOnline} value={localDateInput(draft.due_at)} onChange={event => setDraft(current => ({ ...current, due_at: event.target.value ? withLocalTime(middayOf(event.target.value), localTimeInput(current.due_at) || '12:00') : null, due_is_approx: false, recurrence_rule: event.target.value ? current.recurrence_rule : null }))}/>
         </label>
-        <label className={`select-chip ${draft.size ? 'active' : ''}`}><span className="sr-only">Size</span><select aria-label="Size" value={draft.size ?? ''} disabled={!isOnline} onChange={event => setDraft(current => ({ ...current, size: (event.target.value || null) as Task['size'] }))}><option value="">Size</option><option value="quick">Quick</option><option value="hour">An hour</option><option value="big">Big</option></select></label>
-        <TimePicker className="due-time-chip" value={hasTime ? timeInput(draft.due_at) : ''} disabled={!isOnline} onChange={time => setDraft(current => ({ ...current, due_at: time ? withTime(current.due_at, time) : current.due_at, due_is_approx: time ? false : current.due_is_approx, is_all_day: !time }))}/>
+        <label className={`select-chip ${draft.size ? 'active' : ''}`}><span className="sr-only">Size</span><select aria-label="Size" value={draft.size ?? ''} disabled={!isOnline} onChange={event => setDraft(current => ({ ...current, size: (event.target.value || null) as Task['size'] }))}><option value="">Size</option>{SIZE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <TimePicker className="due-time-chip" value={hasTime ? localTimeInput(draft.due_at) : ''} disabled={!isOnline} onChange={time => setDraft(current => ({ ...current, due_at: time ? withLocalTime(current.due_at, time) : current.due_at, due_is_approx: time ? false : current.due_is_approx, is_all_day: !time }))}/>
       </div>
       {showSecondRow && <div className="chip-row detail-row composer-row-two">
         <ReminderPicker offset={draft.reminder_offset} minutes={draft.reminder_minutes} disabled={!isOnline || !draft.due_at || draft.due_is_approx} onChange={values => setDraft(current => ({ ...current, reminder_offset: values.reminder_offset, reminder_minutes: values.reminder_minutes ?? null }))}/>
         <label className={`select-chip label-select ${draft.label_id ? 'active' : ''}`}><span className="sr-only">Label</span><select aria-label="Label" value={draft.label_id ?? ''} disabled={!isOnline} onChange={event => { if (event.target.value === '__edit') { setLabelEditor(true); return } setDraft(current => ({ ...current, label_id: event.target.value || null })) }}><option value="">Label</option>{labels.map(label => <option value={label.id} key={label.id}>{label.name}</option>)}<option value="__edit">Edit labels…</option></select></label>
-        <label className={`select-chip ${draft.recurrence_rule ? 'active' : ''}`} title="Never means this task will not repeat."><Repeat size={13} aria-hidden="true"/><span className="sr-only">Repeat</span><select aria-label="Repeat" value={draft.recurrence_rule ?? ''} disabled={!isOnline} onChange={event => setRecurrence((event.target.value || null) as Task['recurrence_rule'])}><option value="">Never</option><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label>
+        <label className={`select-chip ${draft.recurrence_rule ? 'active' : ''}`} title="Never means this task will not repeat."><Repeat size={13} aria-hidden="true"/><span className="sr-only">Repeat</span><select aria-label="Repeat" value={draft.recurrence_rule ?? ''} disabled={!isOnline} onChange={event => setRecurrence((event.target.value || null) as Task['recurrence_rule'])}><option value="">Never</option>{REPEAT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <button type="button" disabled={!isOnline} className={`choice-chip icon-chip ${draft.is_important ? 'starred' : ''}`} aria-label={draft.is_important ? 'Remove Important' : 'Mark Important'} aria-pressed={draft.is_important} onClick={() => setDraft(current => ({ ...current, is_important: !current.is_important }))}><Star size={15}/>Important</button>
         <ColorPicker value={draft.color} disabled={!isOnline} onChange={color => setDraft(current => ({ ...current, color }))}/>
         {!noteOpen && <button type="button" className="text-button add-note" disabled={!isOnline} onClick={() => setNoteOpen(true)}>Add note</button>}
