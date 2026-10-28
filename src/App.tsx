@@ -24,6 +24,7 @@ import { exportBackup, restoreBackup } from './lib/backup'
 import { useNow } from './lib/useNow'
 import { getMotionPref, motionScale, prefersReducedMotion, setMotionPref, type MotionPref } from './lib/motion'
 import { splitDayTasks } from './features/today/dayLayout'
+import { lockTask, placeTasks, type EditLock } from './lib/editLock'
 
 type View = 'Today' | 'Inbox' | 'This week' | 'Done'
 const NO_TASKS: Task[] = []
@@ -153,24 +154,28 @@ function App() {
   // "This week" is a rolling seven days from today, matching the day strip, so it is never nearly empty on a Sunday.
   const weekStart = useMemo(() => startOfLocalDay(new Date()), [dayKey])
   const weekEnd = useMemo(() => addLocalDays(weekStart, 7), [weekStart])
+  // The open task keeps its place in every list until editing ends (Done, Escape, or opening another task).
+  const [editLock, setEditLock] = useState<EditLock | null>(null)
+  useEffect(() => { setEditLock(current => current?.id === expanded ? current : lockTask(tasks.find(task => task.id === expanded))) }, [expanded])
+  const placedTasks = useMemo(() => placeTasks(tasks, editLock), [tasks, editLock])
   const visibleTasks = useMemo(() => {
-    const active = tasks.filter(task => !task.deleted_at)
+    const active = placedTasks.filter(task => !task.deleted_at)
     if (view === 'Done') return active.filter(task => task.status === 'completed')
     if (view === 'Today') return active.filter(task => task.status === 'open' && !task.is_inbox && isDueOnDay(task, selectedDay))
     if (view === 'Inbox') return active.filter(task => task.status === 'open' && classifyView(task) === 'Inbox')
     return active.filter(task => task.status === 'open' && !task.is_inbox && task.due_at && new Date(task.due_at) >= weekStart && new Date(task.due_at) < weekEnd)
-  }, [tasks, view, selectedDay, weekStart, weekEnd])
+  }, [placedTasks, view, selectedDay, weekStart, weekEnd])
   const deletedTasks = useMemo(() => tasks.filter(task => task.deleted_at), [tasks])
   const todayDays = useMemo(() => getSevenDays(), [dayKey])
   // Tasks beyond this week used to live in a separate Later tab; they now close out the week view.
-  const afterWeekTasks = useMemo(() => tasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && task.due_at && new Date(task.due_at) >= weekEnd).sort((a, b) => Date.parse(a.due_at!) - Date.parse(b.due_at!)), [tasks, weekEnd])
+  const afterWeekTasks = useMemo(() => placedTasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && task.due_at && new Date(task.due_at) >= weekEnd).sort((a, b) => Date.parse(a.due_at!) - Date.parse(b.due_at!)), [placedTasks, weekEnd])
   const selectedDayTasks = view === 'Today' ? visibleTasks : NO_TASKS
   // The top-ranked task for the day gets a highlight in the schedule.
   const nextTask = useMemo(() => rankOneThing(selectedDayTasks)[0], [selectedDayTasks])
   const { timed: allTimed, anytime: allAnytime } = useMemo(() => splitDayTasks(selectedDayTasks), [selectedDayTasks])
   const missedTasks = useMemo(() => view === 'Today' && isSameLocalDay(selectedDay, new Date())
-    ? tasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && isMissed(task))
-    : NO_TASKS, [tasks, view, selectedDay])
+    ? placedTasks.filter(task => !task.deleted_at && task.status === 'open' && !task.is_inbox && isMissed(task))
+    : NO_TASKS, [placedTasks, view, selectedDay])
   const missedIds = useMemo(() => new Set(missedTasks.map(task => task.id)), [missedTasks])
   const timedTodayTasks = useMemo(() => allTimed.filter(task => !missedIds.has(task.id)), [allTimed, missedIds])
   const anytimeTasks = useMemo(() => allAnytime.filter(task => !missedIds.has(task.id)), [allAnytime, missedIds])
@@ -518,7 +523,7 @@ function App() {
   function renderTaskRows(items: Task[], listName: string, emptyMessage = "Nothing here yet.", hideDate = false) {
     return <section className="task-list" aria-label={listName + " tasks"}>
       {!items.length && (tasksLoaded ? <p className="empty-state">{emptyMessage}</p> : <LoadingRows/>)}
-      {items.map(task => <TaskRow key={task.id} task={task} labels={labels} listName={listName} hideDate={hideDate} isOnline={isOnline} expanded={expanded === task.id} isNew={newTaskId === task.id} isCompleting={completingIds.has(task.id)} isSettling={settleIndexById.has(task.id)} settleIndex={settleIndexById.get(task.id) ?? 0} onToggleExpand={onToggleTaskExpand} onComplete={onRowComplete} onUpdate={onRowUpdate} onRemove={onRowRemove}/>)}
+      {items.map(task => <TaskRow key={task.id} task={editLock?.id === task.id ? tasks.find(live => live.id === task.id) ?? task : task} labels={labels} listName={listName} hideDate={hideDate} isOnline={isOnline} expanded={expanded === task.id} isNew={newTaskId === task.id} isCompleting={completingIds.has(task.id)} isSettling={settleIndexById.has(task.id)} settleIndex={settleIndexById.get(task.id) ?? 0} onToggleExpand={onToggleTaskExpand} onComplete={onRowComplete} onUpdate={onRowUpdate} onRemove={onRowRemove}/>)}
     </section>
   }
 
@@ -566,7 +571,7 @@ function App() {
     && 'PushManager' in window
     && (!('Notification' in window) || Notification.permission !== 'denied'))
   // The side pane ranks what is not already on the Today view: other days, and Inbox when nothing else is dated.
-  const topTasks = useMemo(() => rankCompanionTasks(tasks.filter(task => !task.deleted_at && task.status === 'open' && !missedIds.has(task.id) && !(task.due_at && !task.is_inbox && isSameLocalDay(new Date(task.due_at), selectedDay))), new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC').slice(0, 5).map(entry => entry.task), [tasks, missedIds, selectedDay])
+  const topTasks = useMemo(() => rankCompanionTasks(placedTasks.filter(task => !task.deleted_at && task.status === 'open' && !missedIds.has(task.id) && !(task.due_at && !task.is_inbox && isSameLocalDay(new Date(task.due_at), selectedDay))), new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC').slice(0, 5).map(entry => entry.task), [placedTasks, missedIds, selectedDay])
   async function installApp() {
     if (!installPrompt) return
     await installPrompt.prompt()
